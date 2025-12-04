@@ -110,21 +110,6 @@ def discard_changes_and_home():
 # Utility helpers
 # ===========================
 
-def download_df(label: str, df: pd.DataFrame, filename: str, help: str | None = None):
-    """Render a CSV download button for a dataframe."""
-    if df is None or df.empty:
-        st.button(label, disabled=True, help="Nothing to download yet")
-        return
-
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label=label,
-        data=csv_bytes,
-        file_name=filename,
-        mime="text/csv",
-        help=help,
-    )
-
 def download_excel(label: str, df: pd.DataFrame, filename: str, help: str | None = None, key: str = None):
     """Render an Excel download button for a dataframe."""
     if df is None or df.empty:
