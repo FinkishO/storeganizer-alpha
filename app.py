@@ -395,22 +395,23 @@ def render_step_configuration():
     cells_per_bay = selected_cfg.get("cells_per_bay") or (
         int(st.session_state.get("columns_per_bay", 0)) * int(st.session_state.get("rows_per_column", 0))
     )
+    # Recalculate on every render to ensure reactivity
     override_bays = int(st.session_state.get("bay_count_override", base_bays))
     final_bays = override_bays if override_bays > 0 else base_bays
     st.session_state["bay_count"] = final_bays
+
+    # Dynamic calculations that update with widget changes
     total_cells = final_bays * int(cells_per_bay or 0)
-    estimated_skus = int(total_cells * 0.8)
+    estimated_skus = int(total_cells * 0.9)  # 90% utilization (10% free space for scalability)
 
     metric_cols = st.columns(3)
-    metric_cols[0].metric("Total Cells", total_cells)
-    metric_cols[1].metric("Estimated SKUs", estimated_skus, help="Assuming 80% utilization")
+    metric_cols[0].metric("Total Cells", format_metric(total_cells))
+    metric_cols[1].metric("Estimated SKUs", format_metric(estimated_skus), help="90% utilization (10% free space)")
     price_per_bay = selected_cfg.get("price_per_bay_eur")
     if price_per_bay:
         metric_cols[2].metric("Estimated Price", f"€{int(price_per_bay * final_bays):,}")
     else:
         metric_cols[2].metric("Estimated Price", "TBD", help="Pricing placeholder")
-
-    st.info(f"💡 Configuration: **{selected_cfg.get('name', 'Custom')}** × {final_bays} bays")
 
     st.markdown("---")
 
