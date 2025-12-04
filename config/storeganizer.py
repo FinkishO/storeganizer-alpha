@@ -143,27 +143,54 @@ REQUIRED_COLUMNS = [
     "height_mm",
     "weight_kg",
     "weekly_demand",
-    "stock_weeks",
+    # stock_weeks is optional (defaults to 4.0)
 ]
 
 OPTIONAL_COLUMNS = {
-    # Currently none for Storeganizer
+    "stock_weeks": "Weeks of stock coverage (defaults to 4 if not provided)"
 }
 
 OPTIONAL_DEFAULTS = {
-    # Currently none for Storeganizer
+    "stock_weeks": 4.0  # Default to 4 weeks if not in file
 }
 
 # Column aliases for flexible CSV parsing
+# Supports: generic warehouse formats, IKEA exports, Storeganizer/Speedcell formats
 COLUMN_ALIASES = {
-    "sku_code": ["sku", "article", "article_number", "item_code", "product_code"],
-    "description": ["desc", "name", "product_name", "article_name"],
-    "width_mm": ["width", "w", "width_mm"],
-    "depth_mm": ["depth", "d", "length", "depth_mm", "length_mm"],
-    "height_mm": ["height", "h", "height_mm"],
-    "weight_kg": ["weight", "wt", "weight_kg"],
-    "weekly_demand": ["demand", "forecast", "fcst", "ews", "weekly_fcst"],
-    "stock_weeks": ["weeks", "wos", "weeks_of_stock", "coverage"],
+    "sku_code": [
+        "sku", "article", "article_number", "article number", "item_code",
+        "product_code", "sku_code", "artikelnummer", "pa"
+    ],
+    "description": [
+        "desc", "description", "name", "product_name", "article_name",
+        "article name", "product description", "item_name"
+    ],
+    "width_mm": [
+        "width", "w", "width_mm", "width (mm)", "cp width", "cp width (mm)",
+        "width mm", "breedte", "largeur"
+    ],
+    "depth_mm": [
+        "depth", "d", "length", "l", "depth_mm", "length_mm", "depth (mm)",
+        "length (mm)", "cp length", "cp length (mm)", "cp depth", "cp depth (mm)",
+        "diepte", "profondeur"
+    ],
+    "height_mm": [
+        "height", "h", "height_mm", "height (mm)", "cp height", "cp height (mm)",
+        "hoogte", "hauteur"
+    ],
+    "weight_kg": [
+        "weight", "wt", "weight_kg", "weight (kg)", "cp weight", "cp weight (kg)",
+        "weight kg", "gewicht", "poids"
+    ],
+    "weekly_demand": [
+        "demand", "forecast", "fcst", "ews", "weekly_fcst", "weekly_demand",
+        "weekly demand", "store ff fcst", "total store ff fcst", "fcst (total)",
+        "planning fcst", "demand per week", "verkoop per week"
+    ],
+    "stock_weeks": [
+        "weeks", "wos", "weeks_of_stock", "weeks of stock", "coverage", "stock_weeks",
+        "stock weeks", "voorraad weken", "semaines de stock"
+    ],
 }
 
 # ===========================
