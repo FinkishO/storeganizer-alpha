@@ -48,7 +48,11 @@ def apply_dimension_filter(
     effective_max_width = max_width * width_multiplier
 
     # Dimensional filters
+    # Reject SKUs with zero/missing dimensions (invalid data) OR dimensions exceeding limits
     mask = (
+        (df_work["width_mm"] > 0) &  # Must have valid width
+        (df_work["depth_mm"] > 0) &  # Must have valid depth
+        (df_work["height_mm"] > 0) &  # Must have valid height
         (df_work["width_mm"] <= effective_max_width) &
         (df_work["depth_mm"] <= max_depth) &
         (df_work["height_mm"] <= max_height)
@@ -77,7 +81,8 @@ def apply_weight_filter(
         df_work["weight_kg"] = 0
     df_work["weight_kg"] = pd.to_numeric(df_work["weight_kg"], errors="coerce").fillna(0)
 
-    return df_work[df_work["weight_kg"] <= max_weight_kg]
+    # Reject SKUs with zero/missing weight (invalid data) OR weight exceeding limit
+    return df_work[(df_work["weight_kg"] > 0) & (df_work["weight_kg"] <= max_weight_kg)]
 
 
 def apply_velocity_filter(

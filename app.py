@@ -77,6 +77,10 @@ def init_session_state():
         "allow_extra_width": config.ALLOW_SQUEEZE_PACKAGING,
         "remove_fragile": config.DEFAULT_REMOVE_FRAGILE,
         "bay_count": 5,
+        "elig_max_w": config.DEFAULT_POCKET_WIDTH,
+        "elig_max_d": config.DEFAULT_POCKET_DEPTH,
+        "elig_max_h": config.DEFAULT_POCKET_HEIGHT,
+        "elig_custom_override": False,
     }
 
     for key, value in defaults.items():
@@ -94,6 +98,12 @@ def reset_inventory_state():
     st.session_state["blocks"] = []
     st.session_state["columns_summary"] = None
     st.session_state["planning_df"] = None
+
+def discard_changes_and_home():
+    """Reset session to defaults and return to Welcome."""
+    st.session_state.clear()
+    init_session_state()
+    st.session_state["wizard_step"] = 1
 
 
 # ===========================
@@ -114,6 +124,38 @@ def download_df(label: str, df: pd.DataFrame, filename: str, help: str | None = 
         mime="text/csv",
         help=help,
     )
+
+def download_df_dual(label_prefix: str, df: pd.DataFrame, filename_prefix: str, help: str | None = None):
+    """
+    Render CSV and XLSX download buttons side by side for a dataframe.
+    """
+    if df is None or df.empty:
+        st.button(f"{label_prefix} (CSV)", disabled=True, help="Nothing to download yet")
+        st.button(f"{label_prefix} (XLSX)", disabled=True, help="Nothing to download yet")
+        return
+
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    xlsx_io = io.BytesIO()
+    df.to_excel(xlsx_io, index=False)
+    xlsx_bytes = xlsx_io.getvalue()
+
+    cols = st.columns(2)
+    with cols[0]:
+        st.download_button(
+            label=f"{label_prefix} (CSV)",
+            data=csv_bytes,
+            file_name=f"{filename_prefix}.csv",
+            mime="text/csv",
+            help=help,
+        )
+    with cols[1]:
+        st.download_button(
+            label=f"{label_prefix} (XLSX)",
+            data=xlsx_bytes,
+            file_name=f"{filename_prefix}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help=help,
+        )
 
 
 def blocks_to_dataframe(blocks: List[allocation.CellBlock]) -> pd.DataFrame:
@@ -176,6 +218,21 @@ def render_stepper():
             f"<div style='text-align:center;color:{color};font-weight:{weight};'>"
             f"{step}. {label}</div>",
             unsafe_allow_html=True,
+        )
+
+def render_top_nav():
+    """Quick-access navigation so Next isn't buried after long content."""
+    step = st.session_state.get("wizard_step", 1)
+    total = len(WIZARD_STEPS)
+    if step >= total:
+        return
+    cols = st.columns([5, 1])
+    with cols[1]:
+        st.button(
+            "Next",
+            key=f"top_next_{step}",
+            type="primary",
+            on_click=lambda: go_to_step(step + 1),
         )
 
 
@@ -276,6 +333,28 @@ def add_assq_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df_work
 
 
+def get_active_pocket_limits():
+    """
+    Return the current pocket limits based on selected config or overrides.
+    Ensures Step 4 uses the same dimensions chosen in Step 2.
+    """
+    sel = st.session_state.get("selected_config_size", config.DEFAULT_CONFIG_SIZE)
+    cfg = config.STANDARD_CONFIGS.get(sel)
+    if cfg:
+        return (
+            float(cfg["pocket_width"]),
+            float(cfg["pocket_depth"]),
+            float(cfg["pocket_height"]),
+            float(cfg["pocket_weight_limit"]),
+        )
+    return (
+        float(st.session_state.get("pocket_width", config.DEFAULT_POCKET_WIDTH)),
+        float(st.session_state.get("pocket_depth", config.DEFAULT_POCKET_DEPTH)),
+        float(st.session_state.get("pocket_height", config.DEFAULT_POCKET_HEIGHT)),
+        float(st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT)),
+    )
+
+
 def get_chat_context() -> Dict:
     """Build context dict for Lena based on current planning state."""
     filtered = st.session_state.get("inventory_filtered")
@@ -301,20 +380,38 @@ def get_chat_context() -> Dict:
 
 def render_lena_chat():
     """Sidebar with Lena's RAG chat."""
+    step = st.session_state.get("wizard_step", 1)
+    if step == 1:
+        return  # Hide on welcome
     context = get_chat_context()
     with st.sidebar:
-        st.image(str(LENA_AVATAR_PATH), width=120)
-        st.markdown("### Lena — Storeganizer Analyst")
-        st.caption(config.LENA_PERSONA)
+        col_l, col_img, col_r = st.columns([1, 2, 1])
+        with col_img:
+            st.image(str(LENA_AVATAR_PATH), width=180)
+        with st.expander("Lena — Storeganizer Analyst", expanded=False):
+            st.caption(config.LENA_PERSONA[:140] + "…")
 
         if st.button("Reset chat", key="reset_chat"):
             st.session_state["chat_history"] = []
 
-        st.markdown("**Suggested prompts**")
-        prompt_cols = st.columns(2)
-        for idx, prompt in enumerate(config.SUGGESTED_PROMPTS):
-            if prompt_cols[idx % 2].button(prompt, key=f"suggest_{idx}"):
-                st.session_state["lena_input"] = prompt
+        # Step-aware suggested prompts
+        prompts_by_step = {
+            2: ["How do I upload a 3D model?"],
+            3: ["How do optional columns affect output?", "How do I customize column mapping?"],
+            4: ["What does Velocity Band mean?", "How do filters change eligibility?"],
+            5: ["How to reduce overweight columns?", "Single vs multi-pocket planning?"],
+            6: ["How do I read the planogram export?", "How to share XLSX with ops?"],
+        }
+        step_prompts = prompts_by_step.get(step, [])
+        if step_prompts:
+            st.markdown("**Suggested prompts**")
+            for idx, prompt in enumerate(step_prompts):
+                if st.button(
+                    prompt,
+                    key=f"suggest_{step}_{idx}",
+                    use_container_width=True,
+                ):
+                    st.session_state["lena_input"] = prompt
 
         user_message = st.text_input("Ask Lena", key="lena_input", placeholder="e.g., What are the pocket limits?")
         if st.button("Send to Lena", key="send_lena"):
@@ -390,6 +487,10 @@ def render_step_configuration():
         st.session_state["columns_per_bay"] = cfg["columns_per_bay"]
         st.session_state["rows_per_column"] = cfg["rows_per_column"]
         st.session_state["show_custom_config"] = False
+        # Keep eligibility limits in sync with chosen pocket size
+        st.session_state["elig_max_w"] = cfg["pocket_width"]
+        st.session_state["elig_max_d"] = cfg["pocket_depth"]
+        st.session_state["elig_max_h"] = cfg["pocket_height"]
         st.rerun()
 
     # ===== SECTION 1: Configuration Cards =====
@@ -408,7 +509,7 @@ def render_step_configuration():
             desc = f"{cfg['description']} ({cfg['pocket_width']}×{cfg['pocket_depth']}×{cfg['pocket_height']} mm)"
             st.caption(desc)
             st.image(cfg["image"], use_container_width=True)
-            st.caption(f"Cells/bay: {cfg['cells_per_bay']}")
+            st.caption(f"Pockets per bay: {cfg['cells_per_bay']}")
 
     st.markdown("---")
 
@@ -556,13 +657,14 @@ def render_step_upload():
 
     if st.session_state.get("inventory_raw") is not None:
         status = st.session_state.get("column_status") or {}
-        col_a, col_b = st.columns(2)
-        col_a.markdown("**Required columns present**")
-        col_a.write(status.get("required_present", []))
-        col_b.markdown("**Missing required columns**")
-        col_b.write(status.get("required_missing", []))
-        st.markdown("**Optional columns**")
-        st.write(status.get("optional_present", []))
+        with st.expander("Column status", expanded=False):
+            col_a, col_b = st.columns(2)
+            col_a.markdown("**Required columns present**")
+            col_a.write(status.get("required_present", []))
+            col_b.markdown("**Missing required columns**")
+            col_b.write(status.get("required_missing", []))
+            st.markdown("**Optional columns**")
+            st.write(status.get("optional_present", []))
 
         st.markdown("**Preview**")
         st.dataframe(st.session_state["inventory_raw"].head(10))
@@ -590,7 +692,15 @@ def render_step_filter():
         st.warning("Upload inventory first.")
         return
 
-    st.caption("Tidy this up: clear planning mode, simple demand filters, tuck the heavy stuff into an expander.")
+    # Sync eligibility limits to selected pocket unless manually overridden
+    p_w, p_d, p_h, p_wt = get_active_pocket_limits()
+    if not st.session_state.get("elig_custom_override", False):
+        st.session_state["elig_max_w"] = p_w
+        st.session_state["elig_max_d"] = p_d
+        st.session_state["elig_max_h"] = p_h
+        st.session_state["pocket_weight_limit"] = p_wt
+
+    st.caption("Pick demand filters, confirm the pocket limits from Step 2, then apply eligibility.")
 
     st.markdown("### Planning mode")
     st.radio(
@@ -613,12 +723,13 @@ def render_step_filter():
                 index=["All", "A", "B", "C"].index(st.session_state.get("velocity_band_filter", "All")),
                 key="velocity_band_filter",
             )
+            st.info("Velocity Band: A = fastest movers, B = mid, C = slower. Filters out lower bands.")
             st.number_input(
                 "Forecast threshold (weekly demand)",
                 min_value=0.0,
                 max_value=10000.0,
                 value=float(st.session_state.get("forecast_threshold", config.DEFAULT_FORECAST_THRESHOLD)),
-                step=0.5,
+                step=10.0,
                 key="forecast_threshold",
             )
         with cols[1]:
@@ -634,31 +745,42 @@ def render_step_filter():
             )
 
         with st.expander("Advanced: size & weight filters", expanded=False):
+            st.info(
+                f"Using pocket selection: {int(p_w)} × {int(p_d)} × {int(p_h)} mm, {int(p_wt)} kg per pocket."
+            )
+            custom_override = st.checkbox(
+                "Override pocket limits manually",
+                value=bool(st.session_state.get("elig_custom_override", False)),
+                key="elig_custom_override",
+            )
             adv_cols = st.columns(3)
             with adv_cols[0]:
                 st.number_input(
                     "Max width (mm)",
                     min_value=50.0,
                     max_value=5000.0,
-                    value=float(st.session_state.get("pocket_width", config.DEFAULT_POCKET_WIDTH)),
+                    value=float(st.session_state.get("elig_max_w", config.DEFAULT_POCKET_WIDTH)),
                     key="elig_max_w",
+                    disabled=not custom_override,
                 )
                 st.number_input(
                     "Max depth (mm)",
                     min_value=50.0,
                     max_value=5000.0,
-                    value=float(st.session_state.get("pocket_depth", config.DEFAULT_POCKET_DEPTH)),
+                    value=float(st.session_state.get("elig_max_d", config.DEFAULT_POCKET_DEPTH)),
                     step=5.0,
                     key="elig_max_d",
+                    disabled=not custom_override,
                 )
             with adv_cols[1]:
                 st.number_input(
                     "Max height (mm)",
                     min_value=50.0,
                     max_value=5000.0,
-                    value=float(st.session_state.get("pocket_height", config.DEFAULT_POCKET_HEIGHT)),
+                    value=float(st.session_state.get("elig_max_h", config.DEFAULT_POCKET_HEIGHT)),
                     step=5.0,
                     key="elig_max_h",
+                    disabled=not custom_override,
                 )
                 st.number_input(
                     "Pocket weight limit (kg)",
@@ -667,6 +789,7 @@ def render_step_filter():
                     value=float(st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT)),
                     step=0.5,
                     key="pocket_weight_limit",
+                    disabled=not custom_override,
                 )
             with adv_cols[2]:
                 st.number_input(
@@ -683,9 +806,9 @@ def render_step_filter():
     st.caption(
         f"Using velocity: {st.session_state.get('velocity_band_filter', 'All')}, "
         f"forecast ≥ {st.session_state.get('forecast_threshold', config.DEFAULT_FORECAST_THRESHOLD)}, "
-        f"size W/D/H ≤ {st.session_state.get('elig_max_w', config.DEFAULT_POCKET_WIDTH)}/"
-        f"{st.session_state.get('elig_max_d', config.DEFAULT_POCKET_DEPTH)}/"
-        f"{st.session_state.get('elig_max_h', config.DEFAULT_POCKET_HEIGHT)} mm, "
+        f"size W/D/H ≤ {int(st.session_state.get('elig_max_w', p_w))}/"
+        f"{int(st.session_state.get('elig_max_d', p_d))}/"
+        f"{int(st.session_state.get('elig_max_h', p_h))} mm, "
         f"squeeze={'on' if st.session_state.get('allow_extra_width') else 'off'}, "
         f"fragile={'excluded' if st.session_state.get('remove_fragile') else 'included'}."
     )
@@ -733,12 +856,14 @@ def apply_filters():
         per_sku_units_col="assq_units",
     )
 
+    p_w, p_d, p_h, p_wt = get_active_pocket_limits()
+
     filtered_df, rejected_count, rejection_reasons = eligibility.apply_all_filters(
         df_with_velocity,
-        max_width=st.session_state.get("elig_max_w", config.DEFAULT_POCKET_WIDTH),
-        max_depth=st.session_state.get("elig_max_d", config.DEFAULT_POCKET_DEPTH),
-        max_height=st.session_state.get("elig_max_h", config.DEFAULT_POCKET_HEIGHT),
-        max_weight_kg=st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT),
+        max_width=st.session_state.get("elig_max_w", p_w),
+        max_depth=st.session_state.get("elig_max_d", p_d),
+        max_height=st.session_state.get("elig_max_h", p_h),
+        max_weight_kg=p_wt,
         velocity_band=st.session_state.get("velocity_band_filter", "All"),
         max_weekly_demand=st.session_state.get("forecast_threshold", config.DEFAULT_FORECAST_THRESHOLD),
         allow_squeeze=st.session_state.get("allow_extra_width", False),
@@ -911,12 +1036,12 @@ def render_step_review():
     st.markdown("**Exports**")
     export_cols = st.columns(3)
     with export_cols[0]:
-        download_df("Download planning table", planning_df, "storeganizer_planning.csv")
+        download_df_dual("Planning table", planning_df, "storeganizer_planning")
     with export_cols[1]:
-        download_df("Download columns summary", columns_summary, "storeganizer_columns.csv")
+        download_df_dual("Columns summary", columns_summary, "storeganizer_columns")
     with export_cols[2]:
         blocks_df = blocks_to_dataframe(blocks)
-        download_df("Download planogram blocks", blocks_df, "storeganizer_blocks.csv")
+        download_df_dual("Planogram blocks", blocks_df, "storeganizer_blocks")
 
     st.markdown("---")
     st.markdown("**3D visualization (placeholder)**")
@@ -944,6 +1069,7 @@ def main():
 
     step = st.session_state["wizard_step"]
     with st.container():
+        render_top_nav()
         if step == 1:
             render_step_welcome()
         elif step == 2:
@@ -960,11 +1086,19 @@ def main():
             render_step_welcome()
 
     st.markdown("---")
-    nav_cols = st.columns(2)
+    nav_cols = st.columns([1, 1, 1])
     with nav_cols[0]:
-        st.button("Previous", disabled=step == 1, on_click=lambda: go_to_step(step - 1))
+        st.button("Previous", key="nav_prev", disabled=step == 1, on_click=lambda: go_to_step(step - 1))
     with nav_cols[1]:
-        st.button("Next", disabled=step == len(WIZARD_STEPS), on_click=lambda: go_to_step(step + 1))
+        st.button("Home & Discard", key="nav_home_discard", on_click=discard_changes_and_home)
+    with nav_cols[2]:
+        st.button(
+            "Next",
+            key="nav_next",
+            disabled=step == len(WIZARD_STEPS),
+            type="primary",
+            on_click=lambda: go_to_step(step + 1),
+        )
 
 
 if __name__ == "__main__":
