@@ -360,6 +360,7 @@ def render_step_configuration():
             ):
                 apply_config(config_key)
             st.caption(cfg["description"])
+            st.caption(f"{cfg['pocket_width']}×{cfg['pocket_depth']}×{cfg['pocket_height']} mm cell")
             st.image(cfg["image"], use_container_width=True)
             st.metric("Cells/Bay", cfg["cells_per_bay"])
             st.caption(f"Typical: {cfg['typical_bays']}")
