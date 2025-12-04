@@ -117,10 +117,38 @@ def download_df(label: str, df: pd.DataFrame, filename: str, help: str | None = 
 
 
 def blocks_to_dataframe(blocks: List[allocation.CellBlock]) -> pd.DataFrame:
-    """Convert CellBlock list to DataFrame for export."""
+    """
+    Convert CellBlock list to DataFrame for export.
+
+    Format matches old project output:
+    - Article Number, Article Name, Bay, Column, Row, Cell Label, Weight kg
+    - Column and Row are 1-based (not 0-based)
+    - Cell Label: B{bay:02d}-C{column:02d}-R{row:02d}
+    - For multi-row blocks (row_span > 1), expand into multiple rows
+    """
     if not blocks:
         return pd.DataFrame()
-    records = [asdict(b) for b in blocks]
+
+    records = []
+    for block in blocks:
+        # If block spans multiple rows, create one record per row
+        for row_offset in range(block.row_span):
+            row_1based = block.row_start + row_offset + 1  # Convert to 1-based
+            column_1based = block.column_index + 1  # Convert to 1-based
+
+            records.append({
+                "Article Number": block.sku_code,
+                "Article Name": block.description,
+                "Bay": block.bay,
+                "Column": column_1based,
+                "Row": row_1based,
+                "Cell Label": f"B{block.bay:02d}-C{column_1based:02d}-R{row_1based:02d}",
+                "Velocity Band": block.velocity_band,
+                "Units in Block": block.units_in_block,
+                "Column Weight kg": round(block.column_weight_kg, 2),
+                "Overweight Flag": block.overweight_flag,
+            })
+
     return pd.DataFrame(records)
 
 
@@ -730,19 +758,44 @@ def render_step_plan():
 
     if st.button("Run planning", type="primary"):
         try:
-            df_with_assq = add_assq_columns(df)
-            planning_df = allocation.compute_planning_metrics(
-                df_with_assq,
-                units_per_column=config.DEFAULT_UNITS_PER_COLUMN,
-                max_weight_per_column_kg=st.session_state["max_weight_per_column"],
-                per_sku_units_col="assq_units",
-            )
+            # Check if single pocket per SKU mode is enabled
+            single_pocket_mode = st.session_state.get("single_pocket_per_sku", True)
+
+            if single_pocket_mode:
+                # Simple mode: 1 pocket per SKU (no ASSQ calculation)
+                df_with_assq = df.copy()
+                df_with_assq["assq_units"] = 1
+                units_per_column = 1
+
+                # Compute planning metrics first
+                planning_df = allocation.compute_planning_metrics(
+                    df_with_assq,
+                    units_per_column=units_per_column,
+                    max_weight_per_column_kg=st.session_state["max_weight_per_column"],
+                    per_sku_units_col="assq_units",
+                )
+
+                # Override: exactly 1 unit per SKU (1 pocket per SKU)
+                planning_df["units_required"] = 1
+                planning_df["columns_required"] = 1
+            else:
+                # Multi-pocket mode: calculate ASSQ for stacking
+                df_with_assq = add_assq_columns(df)
+                units_per_column = config.DEFAULT_UNITS_PER_COLUMN
+
+                planning_df = allocation.compute_planning_metrics(
+                    df_with_assq,
+                    units_per_column=units_per_column,
+                    max_weight_per_column_kg=st.session_state["max_weight_per_column"],
+                    per_sku_units_col="assq_units",
+                )
+            # Build layout with calculated planning data
             planning_df, blocks, columns_summary = allocation.build_layout(
                 planning_df,
                 bays=int(st.session_state["bay_count"]),
                 columns_per_bay=int(st.session_state["columns_per_bay"]),
                 rows_per_column=int(st.session_state["rows_per_column"]),
-                units_per_column=config.DEFAULT_UNITS_PER_COLUMN,
+                units_per_column=units_per_column,
                 max_weight_per_column_kg=float(st.session_state["max_weight_per_column"]),
                 per_sku_units_col="assq_units",
             )
