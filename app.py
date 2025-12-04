@@ -628,6 +628,12 @@ def render_step_filter():
                 value=bool(st.session_state.get("remove_fragile", False)),
                 key="remove_fragile",
             )
+            st.checkbox(
+                "Only 1 pocket per SKU",
+                value=bool(st.session_state.get("single_pocket_per_sku", True)),
+                key="single_pocket_per_sku",
+                help="Recommended: Each SKU gets exactly one pocket. Disable for multi-pocket stacking.",
+            )
         with cols[2]:
             st.number_input(
                 "Max width (mm)",
