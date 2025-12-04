@@ -175,8 +175,8 @@ Placeholder implementation in `visualization/viewer_3d.py`.
 ## Development Roadmap
 
 ### Alpha (Current - Pre-Belgium)
-- ✅ Core eligibility and allocation logic
-- ✅ Lena RAG assistant (Storeganizer-focused)
+- ✅ Core eligibility and allocation/slotting logic
+- ✅ Lena AI assistant (Storeganizer-focused)
 - ✅ 2D planogram visualization
 - ✅ Modular architecture
 
@@ -198,7 +198,7 @@ Placeholder implementation in `visualization/viewer_3d.py`.
 ## Partnership Context
 
 **Meeting Date**: December 2025
-**Contact**: Dimitri Saerens (Storeganizer, 20 years logistics experience)
+**Contact**: Dimitri Saerens (KTPconTeyor - storeganizer.com)
 **Workshop**: Planned in Belgium next week
 **Business Model**: TBD - options include:
 - Storeganizer purchases tool outright
