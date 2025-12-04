@@ -1,6 +1,9 @@
-"""Visualization utilities for rendering the planogram in Streamlit using Plotly."""
-from typing import Dict, List
+"""
+Planogram visualization as grid layout (matches reference format).
 
+Renders cells as rectangles with visible labels, not stacked bars.
+"""
+from typing import Dict, List
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -9,30 +12,36 @@ import streamlit as st
 from core.allocation import CellBlock
 
 
-def _normalize_mode(mode: str) -> str:
-    m = (mode or "").strip().lower()
-    if "velocity" in m:
-        return "velocity_band"
-    return "sku"
+def generate_sku_color_map(blocks: List[CellBlock]) -> Dict[str, str]:
+    """
+    Generate consistent color mapping for SKUs.
 
+    Each unique SKU gets a distinct color from a professional palette.
+    """
+    # Use a clean palette (avoiding neon/garish colors)
+    palette = [
+        "#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3",
+        "#fdb462", "#b3de69", "#fccde5", "#d9d9d9", "#bc80bd",
+        "#ccebc5", "#ffed6f", "#a6cee3", "#b2df8a", "#fb9a99",
+        "#fdbf6f", "#cab2d6", "#ffff99", "#1f78b4", "#33a02c",
+    ]
 
-def generate_color_map(blocks: List[CellBlock], mode: str = "sku") -> Dict[str, str]:
-    """Generate color mapping keyed by sku_code or velocity_band."""
-    normalized = _normalize_mode(mode)
-    if normalized == "velocity_band":
-        return {"A": "#FF6B6B", "B": "#FFA94D", "C": "#69DB7C"}
-    if normalized == "hfb":
-        palette = px.colors.qualitative.Set3
-        keys = sorted({getattr(b, "description", "")[:2] for b in blocks})
-        return {k: palette[i % len(palette)] for i, k in enumerate(keys)}
-
-    palette = px.colors.qualitative.Set3
-    keys = sorted({b.sku_code for b in blocks})
-    return {k: palette[i % len(palette)] for i, k in enumerate(keys)}
+    unique_skus = sorted(set(b.sku_code for b in blocks))
+    return {sku: palette[i % len(palette)] for i, sku in enumerate(unique_skus)}
 
 
 def render_planogram(blocks: List[CellBlock], columns_summary: pd.DataFrame, color_mode: str = "By SKU"):
-    """Render planogram into active Streamlit app."""
+    """
+    Render planogram as grid layout with cell labels.
+
+    Format matches reference planogram:
+    - Grid cells with borders
+    - Cell label (B01-C01-R01)
+    - SKU code
+    - Description (truncated)
+    - Unit count
+    - Color by SKU
+    """
     if not blocks:
         st.info("No blocks to render.")
         return
@@ -40,126 +49,136 @@ def render_planogram(blocks: List[CellBlock], columns_summary: pd.DataFrame, col
     rows_per_column = int(columns_summary["rows_per_column"].iloc[0]) if "rows_per_column" in columns_summary else 10
     bays = sorted(set(b.bay for b in blocks))
 
-    cmap = generate_color_map(blocks, mode=color_mode)
-    normalized_mode = _normalize_mode(color_mode)
-
-    def short_sku(s: str) -> str:
-        s = s or ""
-        if len(s) <= 6:
-            return s
-        return f"{s[:3]}***{s[-2:]}"
-
-    def wrap_desc(d: str, width: int = 14, max_lines: int = 3) -> str:
-        words = (d or "").split()
-        lines = []
-        current = ""
-        for w in words:
-            if len(current) + len(w) + 1 <= width:
-                current = (current + " " + w).strip()
-            else:
-                lines.append(current)
-                current = w
-            if len(lines) >= max_lines:
-                break
-        if current and len(lines) < max_lines:
-            lines.append(current)
-        text = "\n".join(lines)
-        if len(lines) == max_lines and " ".join(words).strip() != " ".join(lines):
-            text += "\n…"
-        return text
+    color_map = generate_sku_color_map(blocks)
 
     for bay in bays:
         bay_blocks = [b for b in blocks if b.bay == bay]
-        bay_blocks = sorted(bay_blocks, key=lambda b: (b.column_index, b.row_start))
+
+        # Get unique columns for this bay
+        columns_in_bay = sorted(set(b.column_index for b in bay_blocks))
 
         fig = go.Figure()
 
-        for b in bay_blocks:
-            col_label = f"C{b.column_index+1}"
-            if normalized_mode == "hfb":
-                key = (b.description or "")[:2]
-            else:
-                key = b.sku_code if normalized_mode == "sku" else b.velocity_band
-            color = cmap.get(key, "#888888")
-            border_color = "#c0392b" if b.overweight_flag else "#1b1b1b"
+        # Draw grid cells
+        for block in bay_blocks:
+            col_idx = block.column_index
+            row_idx = block.row_start
 
-            label = f"{short_sku(b.sku_code)}\n{wrap_desc(b.description, width=14, max_lines=3)}"
+            # Cell coordinates (column on x-axis, row on y-axis inverted)
+            x0 = col_idx
+            x1 = col_idx + 1
+            y0 = rows_per_column - row_idx - 1  # Invert y-axis (row 0 at top)
+            y1 = y0 + 1
 
-            fig.add_bar(
-                x=[col_label],
-                y=[b.row_span],
-                base=[b.row_start],
-                marker=dict(color=color, line=dict(color=border_color, width=0.8)),
-                name=b.sku_code,
-                hovertext=(
-                    f"{b.sku_code}: {b.description}<br>"
-                    f"Units: {b.units_in_block}<br>"
-                    f"Velocity: {b.velocity_band} (#{b.velocity_rank})<br>"
-                    f"Column weight: {b.column_weight_kg:.2f} kg"
-                ),
-                hoverinfo="text",
-                text=label,
-                textposition="inside",
-                insidetextanchor="middle",
-                showlegend=False,
+            # Color by SKU
+            fill_color = color_map.get(block.sku_code, "#cccccc")
+            border_color = "#c0392b" if block.overweight_flag else "#2c3e50"
+            border_width = 3 if block.overweight_flag else 1
+
+            # Cell label: B01-C01-R01 format
+            cell_label = f"B{block.bay:02d}-C{col_idx+1:02d}-R{row_idx+1:02d}"
+
+            # Truncate description
+            desc_short = (block.description[:16] + "...") if len(block.description) > 16 else block.description
+
+            # Cell text content
+            cell_text = (
+                f"<b>{cell_label}</b><br>"
+                f"{block.sku_code}<br>"
+                f"{desc_short}<br>"
+                f"Unit:{block.units_in_block}"
             )
 
-        bay_cols_summary = columns_summary[columns_summary["bay"] == bay]
-        for _, r in bay_cols_summary.iterrows():
-            col_label = f"C{int(r['column_index'])+1}"
-            weight_text = f"{r['total_weight_kg']} kg"
-            flag = " ⚠" if bool(r.get("overweight_flag", False)) else ""
+            # Draw rectangle
+            fig.add_shape(
+                type="rect",
+                x0=x0, x1=x1, y0=y0, y1=y1,
+                line=dict(color=border_color, width=border_width),
+                fillcolor=fill_color,
+            )
+
+            # Add text annotation
             fig.add_annotation(
-                x=col_label,
-                y=-0.4,
-                text=f"{weight_text}{flag}",
+                x=(x0 + x1) / 2,
+                y=(y0 + y1) / 2,
+                text=cell_text,
                 showarrow=False,
-                yanchor="top",
-                font=dict(size=11, color="#333"),
-                bgcolor="#eef1f5",
-                bordercolor="#b0b8c1",
-                borderwidth=1,
+                font=dict(size=9, color="#000000"),
+                align="center",
+                xanchor="center",
+                yanchor="middle",
+            )
+
+        # Add column weight annotations at bottom
+        bay_cols_summary = columns_summary[columns_summary["bay"] == bay]
+        for _, col_row in bay_cols_summary.iterrows():
+            col_idx = int(col_row["column_index"])
+            weight_kg = col_row["total_weight_kg"]
+            is_overweight = bool(col_row.get("overweight_flag", False))
+
+            weight_text = f"{int(weight_kg)} kg"
+            if is_overweight:
+                weight_text = f"⚠ {weight_text}"
+
+            # Position below grid
+            fig.add_annotation(
+                x=col_idx + 0.5,
+                y=-0.5,
+                text=f"<b>{weight_text}</b>",
+                showarrow=False,
+                font=dict(size=11, color="#c0392b" if is_overweight else "#2c3e50"),
+                bgcolor="#fff3cd" if is_overweight else "#e9ecef",
+                bordercolor="#c0392b" if is_overweight else "#6c757d",
+                borderwidth=2 if is_overweight else 1,
                 borderpad=4,
             )
 
+        # Layout configuration
+        fig.update_xaxes(
+            range=[-0.5, max(columns_in_bay) + 1.5],
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            title="",
+        )
+
+        fig.update_yaxes(
+            range=[-1, rows_per_column],
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            title="",
+            scaleanchor="x",
+            scaleratio=1,
+        )
+
         fig.update_layout(
-            title_text=f"Bay {bay}",
-            barmode="overlay",
-            xaxis=dict(title="Columns", ticks="outside", tickfont=dict(size=12)),
-            yaxis=dict(
-                title="Rows (top to bottom)",
-                range=[rows_per_column, 0],
-                autorange=False,
-                dtick=1,
-                showgrid=True,
-                gridcolor="#e9ecef",
-            ),
-            bargap=0.05,
-            margin=dict(l=70, r=40, t=70, b=110),
-            height=480,
-            plot_bgcolor="#f8f9fb",
+            title=dict(text=f"<b>Bay {bay}</b>", font=dict(size=18)),
+            height=600,
+            plot_bgcolor="#ffffff",
             paper_bgcolor="#ffffff",
+            margin=dict(l=20, r=20, t=60, b=80),
+            showlegend=False,
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
-    if normalized_mode == "sku":
-        unique_keys = sorted({b.sku_code for b in blocks})
-        legend_items = [(k, cmap.get(k, "#777777")) for k in unique_keys]
-        st.markdown("**Legend (SKU colors)**")
-        cols = st.columns(4)
-        for i, (sku, colhex) in enumerate(legend_items):
-            c = cols[i % len(cols)]
-            c.markdown(
-                f"<div style='display:flex;align-items:center;gap:6px'>"
-                f"<div style='width:16px;height:12px;background:{colhex};border:1px solid #999;'></div>"
-                f"<span>{sku}</span></div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown("**Velocity Band Colors**")
-        st.markdown("- A: coral  \n- B: amber  \n- C: green")
+    # Legend: SKU colors
+    st.markdown("### Legend: SKU Colors")
+    legend_items = sorted(color_map.items())
+
+    # Display in columns
+    num_cols = 4
+    cols = st.columns(num_cols)
+    for i, (sku, color) in enumerate(legend_items):
+        col = cols[i % num_cols]
+        col.markdown(
+            f"<div style='display:flex;align-items:center;gap:6px;margin:4px 0;'>"
+            f"<div style='width:20px;height:16px;background:{color};border:1px solid #333;'></div>"
+            f"<span style='font-size:12px;'>{sku}</span></div>",
+            unsafe_allow_html=True,
+        )
 
 
 if __name__ == "__main__":
-    print("visualization module loaded")
+    print("planogram_2d module loaded")

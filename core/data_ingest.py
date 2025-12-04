@@ -84,9 +84,10 @@ def normalize_column_name(col: str) -> str:
         col: Column name
 
     Returns:
-        Lowercase, stripped version (keeps spaces for IKEA format matching)
+        Lowercase, stripped version with underscores/hyphens treated as spaces.
     """
-    return col.lower().strip()
+    collapsed = col.replace("_", " ").replace("-", " ").strip().lower()
+    return " ".join(collapsed.split())
 
 
 def harmonize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -106,23 +107,21 @@ def harmonize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     rename_map = {}
-    mapped_std_cols = set()  # Track which standard columns we've already mapped
 
-    # Build reverse mapping: alias -> standard_name
-    alias_to_std = {}
+    # Normalize existing columns once for quick lookup (preserve original names)
+    normalized_existing = {normalize_column_name(c): c for c in df.columns}
+    used_source_cols = set()
+
+    # Walk aliases in the order they are declared for each standard column
     for std_col, aliases in config.COLUMN_ALIASES.items():
         for alias in aliases:
-            alias_to_std[normalize_column_name(alias)] = std_col
-
-    # Match columns (only map first occurrence of each standard column)
-    for original_col in df.columns:
-        normalized = normalize_column_name(original_col)
-        if normalized in alias_to_std:
-            std_col = alias_to_std[normalized]
-            # Only map if we haven't already mapped this standard column
-            if std_col not in mapped_std_cols:
-                rename_map[original_col] = std_col
-                mapped_std_cols.add(std_col)
+            norm_alias = normalize_column_name(alias)
+            if norm_alias in normalized_existing:
+                source_col = normalized_existing[norm_alias]
+                if source_col not in used_source_cols:
+                    rename_map[source_col] = std_col
+                    used_source_cols.add(source_col)
+                break
 
     return df.rename(columns=rename_map)
 
@@ -130,6 +129,7 @@ def harmonize_columns(df: pd.DataFrame) -> pd.DataFrame:
 def add_optional_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add optional columns with default values if missing.
+    Also fills required numeric fields with safe defaults when configured.
 
     Args:
         df: DataFrame potentially missing optional columns
@@ -138,6 +138,12 @@ def add_optional_columns(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with optional columns added
     """
     df = df.copy()
+
+    # Fill required numeric fields when a sensible default exists
+    if hasattr(config, "REQUIRED_DEFAULTS"):
+        for col, default_value in config.REQUIRED_DEFAULTS.items():
+            if col not in df.columns:
+                df[col] = default_value
 
     for col, default_value in config.OPTIONAL_DEFAULTS.items():
         if col not in df.columns:

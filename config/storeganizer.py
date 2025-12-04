@@ -34,9 +34,9 @@ STANDARD_CONFIGS = {
         "pocket_depth": 400,
         "pocket_height": 350,
         "pocket_weight_limit": 15.0,
-        "columns_per_bay": 10,
-        "rows_per_column": 6,
-        "cells_per_bay": 60,  # 10 columns × 6 rows
+        "columns_per_bay": 6,
+        "rows_per_column": 4,
+        "cells_per_bay": 24,  # 6 columns × 4 rows
         "typical_bays": "2-4 bays",
         "image": "ref/sg_xs.png",
         "price_per_bay_eur": None,  # Placeholder for future
@@ -48,9 +48,9 @@ STANDARD_CONFIGS = {
         "pocket_depth": 450,
         "pocket_height": 400,
         "pocket_weight_limit": 18.0,
-        "columns_per_bay": 9,
+        "columns_per_bay": 7,
         "rows_per_column": 5,
-        "cells_per_bay": 45,  # 9 columns × 5 rows
+        "cells_per_bay": 35,  # 7 columns × 5 rows
         "typical_bays": "4-8 bays",
         "image": "ref/sg_s.png",
         "price_per_bay_eur": None,
@@ -72,14 +72,14 @@ STANDARD_CONFIGS = {
     },
     "large": {
         "name": "Large",
-        "description": "High-capacity for warehouses with extensive inventory",
+        "description": "High-capacity option for big inventories",
         "pocket_width": 500,
         "pocket_depth": 550,
         "pocket_height": 500,
         "pocket_weight_limit": 25.0,
-        "columns_per_bay": 7,
-        "rows_per_column": 4,
-        "cells_per_bay": 28,  # 7 columns × 4 rows
+        "columns_per_bay": 10,
+        "rows_per_column": 6,
+        "cells_per_bay": 60,  # 10 columns × 6 rows
         "typical_bays": "8-20 bays",
         "image": "ref/sg_l.png",
         "price_per_bay_eur": None,
@@ -158,39 +158,52 @@ OPTIONAL_DEFAULTS = {
 # Supports: generic warehouse formats, IKEA exports, Storeganizer/Speedcell formats
 COLUMN_ALIASES = {
     "sku_code": [
-        "sku", "article", "article_number", "article number", "item_code",
-        "product_code", "sku_code", "artikelnummer", "pa"
+        "article number", "article_number", "article_no", "article", "sku",
+        "sku_code", "item_code", "product_code", "artikelnummer", "artnr", "pa"
     ],
     "description": [
-        "desc", "description", "name", "product_name", "article_name",
-        "article name", "product description", "item_name"
+        "article name", "description", "item description", "sku description",
+        "desc", "product_name", "product description", "name", "item_name"
     ],
     "width_mm": [
-        "width", "w", "width_mm", "width (mm)", "cp width", "cp width (mm)",
-        "width mm", "breedte", "largeur"
+        "cp width (mm)", "cp width", "width_mm", "width (mm)", "width",
+        "w (mm)", "w", "ul width (mm)", "ul width", "breedte", "largeur"
     ],
     "depth_mm": [
-        "depth", "d", "length", "l", "depth_mm", "length_mm", "depth (mm)",
-        "length (mm)", "cp length", "cp length (mm)", "cp depth", "cp depth (mm)",
+        "cp length (mm)", "cp length", "depth_mm", "depth (mm)", "depth",
+        "length_mm", "length (mm)", "length", "cp depth (mm)", "cp depth",
+        "ul length (mm)", "ul length", "d (mm)", "l (mm)", "d", "l",
         "diepte", "profondeur"
     ],
     "height_mm": [
-        "height", "h", "height_mm", "height (mm)", "cp height", "cp height (mm)",
-        "hoogte", "hauteur"
+        "cp height (mm)", "cp height", "height_mm", "height (mm)", "height",
+        "h (mm)", "h", "ul height (mm)", "ul height", "hoogte", "hauteur"
     ],
     "weight_kg": [
-        "weight", "wt", "weight_kg", "weight (kg)", "cp weight", "cp weight (kg)",
-        "weight kg", "gewicht", "poids"
+        "cp weight (kg)", "cp weight", "weight_kg", "weight (kg)", "weight",
+        "kg", "ul weight (kg)", "ul weight", "net weight (kg)", "gewicht", "poids",
+        "wt"
     ],
     "weekly_demand": [
-        "demand", "forecast", "fcst", "ews", "weekly_fcst", "weekly_demand",
-        "weekly demand", "store ff fcst", "total store ff fcst", "fcst (total)",
-        "planning fcst", "demand per week", "verkoop per week"
+        "planning fcst", "total store ff fcst", "store ff fcst", "fcst (total)",
+        "weekly_demand", "weekly demand", "forecast", "fcst", "demand",
+        "demand per week", "expected weekly sales", "ews", "weekly_fcst",
+        "verkoop per week", "fus"
     ],
     "stock_weeks": [
-        "weeks", "wos", "weeks_of_stock", "weeks of stock", "coverage", "stock_weeks",
-        "stock weeks", "voorraad weken", "semaines de stock"
+        "stock_weeks", "stockweeks", "stock weeks", "weeks_of_stock", "weeks of stock",
+        "weeks_of_supply", "stock weeks", "weeks", "wos", "sos", "coverage",
+        "voorraad weken", "semaines de stock", "total wis"
     ],
+}
+
+# Defaults for required numeric columns when the source file omits them entirely
+REQUIRED_DEFAULTS = {
+    "width_mm": 0.0,
+    "depth_mm": 0.0,
+    "height_mm": 0.0,
+    "weight_kg": 0.0,
+    "weekly_demand": 1.0,
 }
 
 # ===========================

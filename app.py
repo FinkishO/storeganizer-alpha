@@ -153,12 +153,30 @@ def blocks_to_dataframe(blocks: List[allocation.CellBlock]) -> pd.DataFrame:
 
 
 def render_stepper():
-    """Show wizard progress and allow quick navigation."""
+    """Show wizard progress with clearer hierarchy."""
     current = st.session_state["wizard_step"]
-    cols = st.columns(len(WIZARD_STEPS))
+    total_steps = len(WIZARD_STEPS)
+    progress_pct = int((current - 1) / (total_steps - 1) * 100) if total_steps > 1 else 0
+
+    top_cols = st.columns([3, 1])
+    with top_cols[0]:
+        st.markdown(
+            f"<div style='font-size:20px;font-weight:700;'>Step {current} of {total_steps}</div>",
+            unsafe_allow_html=True,
+        )
+    with top_cols[1]:
+        st.progress(progress_pct / 100)
+
+    cols = st.columns(total_steps)
     for idx, (step, label) in enumerate(WIZARD_STEPS.items()):
-        style = "font-weight:700;color:#0f766e" if step == current else "color:#6b7280"
-        cols[idx].markdown(f"<div style='{style}'>{step}. {label}</div>", unsafe_allow_html=True)
+        state = "current" if step == current else "done" if step < current else "pending"
+        color = {"current": "#0f766e", "done": "#4b5563", "pending": "#9ca3af"}[state]
+        weight = "700" if state == "current" else "500"
+        cols[idx].markdown(
+            f"<div style='text-align:center;color:{color};font-weight:{weight};'>"
+            f"{step}. {label}</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def go_to_step(step: int):
@@ -358,7 +376,7 @@ def render_step_welcome():
 
 def render_step_configuration():
     st.subheader("Step 2 — Choose Your Configuration")
-    st.caption("Select a standard Storeganizer configuration.")
+    st.caption("Select a standard Storeganizer configuration or customize your own.")
 
     def apply_config(config_key: str):
         cfg = config.STANDARD_CONFIGS.get(config_key)
@@ -387,13 +405,10 @@ def render_step_configuration():
                 type="primary" if is_selected else "secondary",
             ):
                 apply_config(config_key)
-            st.caption(cfg["description"])
-            st.caption(f"{cfg['pocket_width']}×{cfg['pocket_depth']}×{cfg['pocket_height']} mm cell")
+            desc = f"{cfg['description']} ({cfg['pocket_width']}×{cfg['pocket_depth']}×{cfg['pocket_height']} mm)"
+            st.caption(desc)
             st.image(cfg["image"], use_container_width=True)
-            st.metric("Cells/Bay", cfg["cells_per_bay"])
-            st.caption(f"Typical: {cfg['typical_bays']}")
-            if cfg.get("recommended"):
-                st.success("✨ Recommended")
+            st.caption(f"Cells/bay: {cfg['cells_per_bay']}")
 
     st.markdown("---")
 
@@ -401,46 +416,39 @@ def render_step_configuration():
     st.markdown("### How Many Bays?")
     col1, _ = st.columns([2, 1])
     with col1:
-        st.number_input(
+        num_bays = st.number_input(
             "Number of bays",
             min_value=1,
             max_value=50,
             value=int(st.session_state.get("num_bays", 5)),
             key="num_bays",
-            help="Total Storeganizer bays you plan to deploy.",
+            help="Total number of Storeganizer bays in your warehouse",
         )
-    base_bays = int(st.session_state.get("num_bays", 5))
+    st.session_state["bay_count"] = int(num_bays)
 
     # ===== SECTION 3: Capacity Summary =====
     st.markdown("### Your Configuration Summary")
     selected_key = st.session_state.get("selected_config_size", config.DEFAULT_CONFIG_SIZE)
     selected_cfg = config.STANDARD_CONFIGS.get(selected_key)
-    if not selected_cfg:
-        selected_cfg = {
-            "name": "Custom",
-            "cells_per_bay": int(st.session_state.get("columns_per_bay", 0)) * int(st.session_state.get("rows_per_column", 0)),
-            "price_per_bay_eur": None,
-        }
-    cells_per_bay = selected_cfg.get("cells_per_bay") or (
-        int(st.session_state.get("columns_per_bay", 0)) * int(st.session_state.get("rows_per_column", 0))
+    cells_per_bay = (
+        selected_cfg["cells_per_bay"]
+        if selected_cfg
+        else int(st.session_state.get("columns_per_bay", 0)) * int(st.session_state.get("rows_per_column", 0))
     )
-    # Recalculate on every render to ensure reactivity
-    override_bays = int(st.session_state.get("bay_count_override", base_bays))
-    final_bays = override_bays if override_bays > 0 else base_bays
-    st.session_state["bay_count"] = final_bays
-
-    # Dynamic calculations that update with widget changes
-    total_cells = final_bays * int(cells_per_bay or 0)
-    estimated_skus = int(total_cells * 0.9)  # 90% utilization (10% free space for scalability)
+    total_cells = int(num_bays) * int(cells_per_bay or 0)
+    estimated_skus = int(total_cells * 0.8)  # Assume 80% utilization
 
     metric_cols = st.columns(3)
     metric_cols[0].metric("Total Cells", format_metric(total_cells))
-    metric_cols[1].metric("Estimated SKUs", format_metric(estimated_skus), help="90% utilization (10% free space)")
-    price_per_bay = selected_cfg.get("price_per_bay_eur")
+    metric_cols[1].metric("Estimated SKUs", format_metric(estimated_skus), help="Assuming 80% utilization")
+    price_per_bay = selected_cfg.get("price_per_bay_eur") if selected_cfg else None
     if price_per_bay:
-        metric_cols[2].metric("Estimated Price", f"€{int(price_per_bay * final_bays):,}")
+        metric_cols[2].metric("Estimated Price", f"€{int(price_per_bay * int(num_bays)):,}")
     else:
-        metric_cols[2].metric("Estimated Price", "TBD", help="Pricing placeholder")
+        metric_cols[2].metric("Estimated Price", "TBD", help="Contact Storeganizer for pricing")
+
+    selection_name = selected_cfg["name"] if selected_cfg else "Custom"
+    st.info(f"💡 Configuration: **{selection_name}** × {int(num_bays)} bays")
 
     st.markdown("---")
 
@@ -455,7 +463,7 @@ def render_step_configuration():
         "max_weight_per_column": st.session_state.get("max_weight_per_column"),
     }
     with st.expander("⚙️ Advanced: Custom Configuration", expanded=False):
-        st.caption("Override the standard configuration with custom pocket dimensions and structure.")
+        st.caption("Override standard configurations with custom pocket dimensions and structure.")
         adv_cols = st.columns(3)
         with adv_cols[0]:
             st.number_input(
@@ -515,14 +523,6 @@ def render_step_configuration():
                 key="max_weight_per_column",
                 help="Flag columns exceeding this threshold.",
             )
-            st.number_input(
-                "Bays to plan (override)",
-                min_value=1,
-                max_value=200,
-                value=int(st.session_state.get("bay_count_override", st.session_state.get("bay_count", base_bays))),
-                key="bay_count_override",
-                help="Use if you need a different bay count than above.",
-            )
         new_state = {
             "pocket_width": st.session_state.get("pocket_width"),
             "pocket_depth": st.session_state.get("pocket_depth"),
@@ -531,19 +531,10 @@ def render_step_configuration():
             "columns_per_bay": st.session_state.get("columns_per_bay"),
             "rows_per_column": st.session_state.get("rows_per_column"),
             "max_weight_per_column": st.session_state.get("max_weight_per_column"),
-            "bay_count_override": st.session_state.get("bay_count_override"),
         }
         if new_state != prior_state:
             st.session_state["selected_config_size"] = "custom"
             st.session_state["show_custom_config"] = True
-
-    # Navigation
-    # Navigation handled globally; no local buttons here.
-
-
-# ===========================
-# Step 3: Upload Inventory
-# ===========================
 
 def render_step_upload():
     st.subheader("Step 3 — Upload Inventory")
@@ -599,9 +590,22 @@ def render_step_filter():
         st.warning("Upload inventory first.")
         return
 
-    st.caption("Apply Storeganizer eligibility rules (dimensions, weight, velocity, forecast, fragile).")
+    st.caption("Tidy this up: clear planning mode, simple demand filters, tuck the heavy stuff into an expander.")
+
+    st.markdown("### Planning mode")
+    st.radio(
+        "Pocket allocation",
+        options=["Single pocket per SKU (recommended)", "Multi-pocket stacking (coming soon)"],
+        index=0,
+        disabled=False,
+        help="Single pocket: one SKU per pocket. Multi-pocket stacking available in future release.",
+    )
+    # Always use single pocket mode
+    st.session_state["single_pocket_per_sku"] = True
+
+    st.markdown("### Demand & velocity")
     with st.form("eligibility_form"):
-        cols = st.columns(3)
+        cols = st.columns([1, 1])
         with cols[0]:
             st.selectbox(
                 "Velocity band",
@@ -609,12 +613,6 @@ def render_step_filter():
                 index=["All", "A", "B", "C"].index(st.session_state.get("velocity_band_filter", "All")),
                 key="velocity_band_filter",
             )
-            st.checkbox(
-                "Allow soft packaging squeeze (width +10%)",
-                value=bool(st.session_state.get("allow_extra_width", False)),
-                key="allow_extra_width",
-            )
-        with cols[1]:
             st.number_input(
                 "Forecast threshold (weekly demand)",
                 min_value=0.0,
@@ -623,40 +621,85 @@ def render_step_filter():
                 step=0.5,
                 key="forecast_threshold",
             )
+        with cols[1]:
+            st.checkbox(
+                "Allow soft packaging squeeze (+10% width)",
+                value=bool(st.session_state.get("allow_extra_width", False)),
+                key="allow_extra_width",
+            )
             st.checkbox(
                 "Remove fragile items",
                 value=bool(st.session_state.get("remove_fragile", False)),
                 key="remove_fragile",
             )
-            st.checkbox(
-                "Only 1 pocket per SKU",
-                value=bool(st.session_state.get("single_pocket_per_sku", True)),
-                key="single_pocket_per_sku",
-                help="Recommended: Each SKU gets exactly one pocket. Disable for multi-pocket stacking.",
-            )
-        with cols[2]:
-            st.number_input(
-                "Max width (mm)",
-                min_value=50.0,
-                max_value=5000.0,
-                value=float(st.session_state.get("pocket_width", config.DEFAULT_POCKET_WIDTH)),
-                key="elig_max_w",
-            )
-            st.number_input(
-                "Max depth (mm)",
-                min_value=50.0,
-                max_value=5000.0,
-                value=float(st.session_state.get("pocket_depth", config.DEFAULT_POCKET_DEPTH)),
-                key="elig_max_d",
-            )
-            st.number_input(
-                "Max height (mm)",
-                min_value=50.0,
-                max_value=5000.0,
-                value=float(st.session_state.get("pocket_height", config.DEFAULT_POCKET_HEIGHT)),
-                key="elig_max_h",
-            )
-        st.form_submit_button("Apply filters", on_click=apply_filters)
+
+        with st.expander("Advanced: size & weight filters", expanded=False):
+            adv_cols = st.columns(3)
+            with adv_cols[0]:
+                st.number_input(
+                    "Max width (mm)",
+                    min_value=50.0,
+                    max_value=5000.0,
+                    value=float(st.session_state.get("pocket_width", config.DEFAULT_POCKET_WIDTH)),
+                    key="elig_max_w",
+                )
+                st.number_input(
+                    "Max depth (mm)",
+                    min_value=50.0,
+                    max_value=5000.0,
+                    value=float(st.session_state.get("pocket_depth", config.DEFAULT_POCKET_DEPTH)),
+                    step=5.0,
+                    key="elig_max_d",
+                )
+            with adv_cols[1]:
+                st.number_input(
+                    "Max height (mm)",
+                    min_value=50.0,
+                    max_value=5000.0,
+                    value=float(st.session_state.get("pocket_height", config.DEFAULT_POCKET_HEIGHT)),
+                    step=5.0,
+                    key="elig_max_h",
+                )
+                st.number_input(
+                    "Pocket weight limit (kg)",
+                    min_value=1.0,
+                    max_value=200.0,
+                    value=float(st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT)),
+                    step=0.5,
+                    key="pocket_weight_limit",
+                )
+            with adv_cols[2]:
+                st.number_input(
+                    "Max weight per column (kg)",
+                    min_value=5.0,
+                    max_value=1000.0,
+                    value=float(st.session_state.get("max_weight_per_column", config.DEFAULT_COLUMN_WEIGHT_LIMIT)),
+                    step=5.0,
+                    key="max_weight_per_column",
+                )
+
+        submitted = st.form_submit_button("Apply filters")
+
+    st.caption(
+        f"Using velocity: {st.session_state.get('velocity_band_filter', 'All')}, "
+        f"forecast ≥ {st.session_state.get('forecast_threshold', config.DEFAULT_FORECAST_THRESHOLD)}, "
+        f"size W/D/H ≤ {st.session_state.get('elig_max_w', config.DEFAULT_POCKET_WIDTH)}/"
+        f"{st.session_state.get('elig_max_d', config.DEFAULT_POCKET_DEPTH)}/"
+        f"{st.session_state.get('elig_max_h', config.DEFAULT_POCKET_HEIGHT)} mm, "
+        f"squeeze={'on' if st.session_state.get('allow_extra_width') else 'off'}, "
+        f"fragile={'excluded' if st.session_state.get('remove_fragile') else 'included'}."
+    )
+
+    if submitted:
+        apply_filters()
+
+    # Quick peek at potential fragile items before exclusion
+    if raw_df is not None and "description" in raw_df.columns:
+        fragile_pattern = "|".join(config.FRAGILE_KEYWORDS)
+        potential_fragile = raw_df[raw_df["description"].str.contains(fragile_pattern, case=False, na=False)]
+        if len(potential_fragile) > 0:
+            st.info(f"Potential fragile SKUs: {len(potential_fragile)} flagged by keywords ({', '.join(config.FRAGILE_KEYWORDS)}).")
+            st.dataframe(potential_fragile[["sku_code", "description"]].head(10), use_container_width=True)
 
     filtered = st.session_state.get("inventory_filtered")
     if filtered is not None:
