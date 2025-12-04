@@ -37,6 +37,7 @@ class CellBlock:
     velocity_band: str
     overweight_flag: bool = False
     column_weight_kg: float = 0.0
+    sku_weight_kg: float = 0.0  # Individual SKU weight (not cumulative)
 
 
 def extract_family_identifier(description: str) -> str:
@@ -262,6 +263,7 @@ def build_layout(
                 velocity_band=velocity_band,
                 overweight_flag=False,
                 column_weight_kg=0.0,
+                sku_weight_kg=float(weight_kg),  # Store individual SKU weight
             )
 
             # Update column state

@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 
-from core import allocation, data_ingest, eligibility
+from core import allocation, data_ingest, eligibility, exports
 from rag import rag_service
 from visualization import planogram_2d
 from visualization.viewer_3d import embed_3d_viewer, get_configuration_suggestions
@@ -125,37 +125,21 @@ def download_df(label: str, df: pd.DataFrame, filename: str, help: str | None = 
         help=help,
     )
 
-def download_df_dual(label_prefix: str, df: pd.DataFrame, filename_prefix: str, help: str | None = None):
-    """
-    Render CSV and XLSX download buttons side by side for a dataframe.
-    """
+def download_excel(label: str, df: pd.DataFrame, filename: str, help: str | None = None, key: str = None):
+    """Render an Excel download button for a dataframe."""
     if df is None or df.empty:
-        st.button(f"{label_prefix} (CSV)", disabled=True, help="Nothing to download yet")
-        st.button(f"{label_prefix} (XLSX)", disabled=True, help="Nothing to download yet")
+        st.button(label, disabled=True, help="Nothing to download yet", key=key)
         return
 
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    xlsx_io = io.BytesIO()
-    df.to_excel(xlsx_io, index=False)
-    xlsx_bytes = xlsx_io.getvalue()
-
-    cols = st.columns(2)
-    with cols[0]:
-        st.download_button(
-            label=f"{label_prefix} (CSV)",
-            data=csv_bytes,
-            file_name=f"{filename_prefix}.csv",
-            mime="text/csv",
-            help=help,
-        )
-    with cols[1]:
-        st.download_button(
-            label=f"{label_prefix} (XLSX)",
-            data=xlsx_bytes,
-            file_name=f"{filename_prefix}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help=help,
-        )
+    xlsx_bytes = exports.export_to_excel(df)
+    st.download_button(
+        label=label,
+        data=xlsx_bytes,
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help=help,
+        key=key,
+    )
 
 
 def blocks_to_dataframe(blocks: List[allocation.CellBlock]) -> pd.DataFrame:
@@ -1033,15 +1017,52 @@ def render_step_review():
     )
 
     st.markdown("---")
-    st.markdown("**Exports**")
+    st.markdown("### Exports")
+    st.caption("Download professional Excel reports for warehouse implementation")
+
+    # Create export dataframes
+    full_report = exports.create_full_article_report(
+        original_df=st.session_state.get("inventory_raw"),
+        eligible_df=st.session_state.get("inventory_filtered"),
+        rejection_reasons=st.session_state.get("rejection_reasons", {}),
+        planning_df=planning_df,
+    )
+
+    planogram_layout = exports.create_planogram_layout(blocks)
+
+    # Export buttons
     export_cols = st.columns(3)
+
     with export_cols[0]:
-        download_df_dual("Planning table", planning_df, "storeganizer_planning")
+        download_excel(
+            label="📊 Full Article Report",
+            df=full_report,
+            filename="storeganizer_full_report.xlsx",
+            help="All SKUs (eligible + rejected) with status, dimensions, and bay assignments",
+            key="export_full_report",
+        )
+        if full_report is not None and len(full_report) > 0:
+            st.caption(f"{len(full_report)} articles total")
+
     with export_cols[1]:
-        download_df_dual("Columns summary", columns_summary, "storeganizer_columns")
+        download_excel(
+            label="📍 Planogram Layout",
+            df=planogram_layout,
+            filename="storeganizer_layout.xlsx",
+            help="Implementation file: Article → Bay/Column/Row assignments",
+            key="export_planogram",
+        )
+        if planogram_layout is not None and len(planogram_layout) > 0:
+            st.caption(f"{len(planogram_layout)} cell assignments")
+
     with export_cols[2]:
-        blocks_df = blocks_to_dataframe(blocks)
-        download_df_dual("Planogram blocks", blocks_df, "storeganizer_blocks")
+        st.button(
+            "📄 Planogram PDF (coming soon)",
+            disabled=True,
+            help="Visual planogram grid for printing",
+            key="export_pdf_placeholder",
+        )
+        st.caption("Visual grid export")
 
     st.markdown("---")
     st.markdown("**3D visualization (placeholder)**")
