@@ -632,6 +632,25 @@ def render_step_upload():
         except Exception as exc:  # pragma: no cover - defensive log
             st.error(f"Unexpected error reading file: {exc}")
 
+    st.markdown("---")
+    st.info("💡 **No file handy?** Try our example IKEA dataset (5,191 SKUs) to explore all features without uploading your own data.")
+    if st.button("📂 Load Example Dataset (5,191 SKUs)"):
+        example_file_path = Path(__file__).parent / "ref" / "cp_input1.xlsx"
+        if example_file_path.exists():
+            try:
+                df = data_ingest.load_inventory_file(str(example_file_path))
+                df = add_assq_columns(df)
+                st.session_state["inventory_raw"] = df
+                st.session_state["inventory_filename"] = example_file_path.name
+                st.session_state["column_status"] = data_ingest.get_column_status(df)
+                st.success(f"✅ Loaded {len(df):,} example SKUs from IKEA inventory")
+                st.info("👉 Proceed to **Step 4** to configure eligibility filters.")
+                go_to_step(4)
+            except Exception as exc:
+                st.error(f"Error loading example: {exc}")
+        else:
+            st.warning("Example file not found in repository.")
+
     if st.session_state.get("inventory_raw") is not None:
         status = st.session_state.get("column_status") or {}
         with st.expander("Column status", expanded=False):
