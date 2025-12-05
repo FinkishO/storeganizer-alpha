@@ -27,6 +27,14 @@ from visualization import planogram_2d
 from visualization.viewer_3d import embed_3d_viewer, get_configuration_suggestions
 from config import storeganizer as config
 
+# Auto-initialize RAG database if missing (for Streamlit Cloud deployment)
+if not Path("rag_store.db").exists():
+    try:
+        from rag.ingest_ref import ingest
+        ingest()
+    except Exception:
+        pass  # Silently fail if RAG init fails
+
 
 APP_TITLE = "Storeganizer Planning Tool"
 APP_TAGLINE = "Plan Storeganizer pocket storage layouts from raw inventory to bay-level planogram."
@@ -863,8 +871,73 @@ def render_step_plan():
         st.warning("Apply filters first.")
         return
 
-    cols = st.columns(3)
-    with cols[0]:
+    # Get configuration from Step 2 (read-only in Step 5)
+    configured_bays = int(st.session_state.get("num_bays", 4))
+    configured_columns = int(st.session_state.get("columns_per_bay", config.DEFAULT_COLUMNS_PER_BAY))
+    configured_rows = int(st.session_state.get("rows_per_column", config.DEFAULT_ROWS_PER_COLUMN))
+
+    # Calculate required bays based on eligible SKU count
+    required_bays = allocation.calculate_bay_requirements(
+        sku_count=len(df),
+        columns_per_bay=configured_columns,
+        rows_per_column=configured_rows,
+    )
+
+    # Calculate deficit
+    bay_deficit = required_bays - configured_bays
+
+    # === Bay Capacity Analysis ===
+    st.markdown("### Bay Capacity Analysis")
+    capacity_cols = st.columns(4)
+    capacity_cols[0].metric("Eligible SKUs", format_metric(len(df)))
+    capacity_cols[1].metric("Configured Bays", format_metric(configured_bays), help="From Step 2 configuration")
+    capacity_cols[2].metric("Required Bays", format_metric(required_bays), help="Based on SKU count and layout")
+
+    if bay_deficit > 0:
+        capacity_cols[3].metric("⚠️ Bay Deficit", format_metric(bay_deficit), delta=f"-{bay_deficit}", delta_color="inverse")
+        st.error(f"❌ Insufficient capacity: Missing {bay_deficit} bay(s) to accommodate all {len(df)} SKUs with current layout.")
+
+        # Option to exclude overflowing articles
+        exclude_overflow = st.checkbox(
+            "🔧 Exclude overflowing articles (lowest priority first)",
+            value=False,
+            key="exclude_overflow_articles",
+            help="Remove lowest-velocity SKUs (Band C first) until articles fit in configured bay count",
+        )
+
+        if exclude_overflow:
+            # Calculate how many SKUs fit in configured bays
+            max_cells = configured_bays * configured_columns * configured_rows
+            max_skus = max_cells  # In single-pocket mode, 1 SKU = 1 cell
+
+            if len(df) > max_skus:
+                # Sort by velocity (C -> B -> A, then by demand ascending)
+                df_sorted = df.copy()
+                df_sorted["velocity_priority"] = df_sorted["velocity_band"].map({"A": 3, "B": 2, "C": 1}).fillna(0)
+                df_sorted = df_sorted.sort_values(by=["velocity_priority", "weekly_demand"], ascending=[True, True])
+
+                # Take only SKUs that fit
+                df = df_sorted.head(max_skus).copy()
+                excluded_count = len(st.session_state.get("inventory_filtered", [])) - len(df)
+                st.warning(f"🔧 Excluded {excluded_count} lowest-priority SKUs to fit capacity. Now planning with {len(df)} SKUs.")
+
+                # Recalculate required bays
+                required_bays = allocation.calculate_bay_requirements(
+                    sku_count=len(df),
+                    columns_per_bay=configured_columns,
+                    rows_per_column=configured_rows,
+                )
+                bay_deficit = required_bays - configured_bays
+    else:
+        capacity_cols[3].metric("✅ Surplus Capacity", format_metric(-bay_deficit), delta=f"+{-bay_deficit}", delta_color="normal")
+        st.success(f"✅ Sufficient capacity: {configured_bays} bays can accommodate all {len(df)} SKUs.")
+
+    # === Configuration Overview ===
+    st.markdown("### Layout Configuration")
+    st.caption("Configuration inherited from Step 2 (Capacity Calculator)")
+
+    layout_cols = st.columns(3)
+    with layout_cols[0]:
         st.number_input(
             "Max weight per column (kg)",
             min_value=5.0,
@@ -872,32 +945,138 @@ def render_step_plan():
             value=float(st.session_state.get("max_weight_per_column", config.DEFAULT_COLUMN_WEIGHT_LIMIT)),
             step=5.0,
             key="max_weight_per_column",
+            help="Weight limit for overweight flagging",
         )
-    with cols[1]:
+    with layout_cols[1]:
         st.number_input(
             "Columns per bay",
             min_value=1,
             max_value=30,
-            value=int(st.session_state.get("columns_per_bay", config.DEFAULT_COLUMNS_PER_BAY)),
-            key="columns_per_bay",
+            value=configured_columns,
+            disabled=True,
+            help="Configured in Step 2 (read-only)",
         )
-    with cols[2]:
+    with layout_cols[2]:
         st.number_input(
             "Rows per column",
             min_value=1,
             max_value=20,
-            value=int(st.session_state.get("rows_per_column", config.DEFAULT_ROWS_PER_COLUMN)),
-            key="rows_per_column",
+            value=configured_rows,
+            disabled=True,
+            help="Configured in Step 2 (read-only)",
         )
 
-    st.number_input(
-        "Bays to allocate",
-        min_value=1,
-        max_value=300,
-        value=int(st.session_state.get("bay_count", 4)),
-        key="bay_count",
-        help="You can increase bay count if columns are overweight.",
-    )
+    # === Threshold Overview ===
+    with st.expander("📊 Threshold Overview & Risk Filters", expanded=False):
+        st.markdown("#### Current Filter Settings")
+        st.caption("Adjust thresholds to refine eligible SKU pool. Changes require re-applying filters in Step 4.")
+
+        threshold_cols = st.columns(3)
+        with threshold_cols[0]:
+            st.metric("Max Width", f"{st.session_state.get('elig_max_w', config.DEFAULT_POCKET_WIDTH):.0f} mm")
+            st.metric("Max Depth", f"{st.session_state.get('elig_max_d', config.DEFAULT_POCKET_DEPTH):.0f} mm")
+            st.metric("Max Height", f"{st.session_state.get('elig_max_h', config.DEFAULT_POCKET_HEIGHT):.0f} mm")
+        with threshold_cols[1]:
+            st.metric("Pocket Weight Limit", f"{st.session_state.get('pocket_weight_limit', config.DEFAULT_POCKET_WEIGHT_LIMIT):.1f} kg")
+            st.metric("Column Weight Limit", f"{st.session_state.get('max_weight_per_column', config.DEFAULT_COLUMN_WEIGHT_LIMIT):.0f} kg")
+        with threshold_cols[2]:
+            st.metric("Max Weekly Demand", f"{st.session_state.get('forecast_threshold', config.DEFAULT_FORECAST_THRESHOLD):.1f} units")
+            st.metric("Velocity Filter", st.session_state.get('velocity_band_filter', 'All'))
+
+        if st.button("🔄 Go back to Step 4 to adjust filters", key="goto_step4_from_plan"):
+            go_to_step(4)
+
+    # === Risk Overview ===
+    with st.expander("⚠️ Risk Overview & Pre-Planning Analysis", expanded=False):
+        st.markdown("#### Pre-Planning Risk Assessment")
+        st.caption("Identifies potential issues before running allocation algorithm")
+
+        # Identify risky SKUs
+        risk_df = df.copy()
+        risk_df["risk_score"] = 0.0
+        risk_df["risk_flags"] = ""
+
+        # Weight risks
+        pocket_weight_limit = st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT)
+        column_weight_limit = st.session_state.get("max_weight_per_column", config.DEFAULT_COLUMN_WEIGHT_LIMIT)
+
+        # Flag near-limit dimensions (within 10%)
+        max_w = st.session_state.get("elig_max_w", config.DEFAULT_POCKET_WIDTH)
+        max_d = st.session_state.get("elig_max_d", config.DEFAULT_POCKET_DEPTH)
+        max_h = st.session_state.get("elig_max_h", config.DEFAULT_POCKET_HEIGHT)
+
+        risk_df["near_width_limit"] = risk_df["width_mm"] >= (max_w * 0.9)
+        risk_df["near_depth_limit"] = risk_df["depth_mm"] >= (max_d * 0.9)
+        risk_df["near_height_limit"] = risk_df["height_mm"] >= (max_h * 0.9)
+        risk_df["near_weight_limit"] = risk_df["weight_kg"] >= (pocket_weight_limit * 0.9)
+
+        # Build risk flags
+        def build_risk_flags(row):
+            flags = []
+            score = 0
+            if row["near_width_limit"]:
+                flags.append("Width near limit")
+                score += 1
+            if row["near_depth_limit"]:
+                flags.append("Depth near limit")
+                score += 1
+            if row["near_height_limit"]:
+                flags.append("Height near limit")
+                score += 1
+            if row["near_weight_limit"]:
+                flags.append("Weight near limit")
+                score += 2
+            return pd.Series({"risk_flags": " | ".join(flags) if flags else "No risk", "risk_score": score})
+
+        risk_summary = risk_df.apply(build_risk_flags, axis=1)
+        risk_df["risk_flags"] = risk_summary["risk_flags"]
+        risk_df["risk_score"] = risk_summary["risk_score"]
+
+        # Summary metrics
+        high_risk_skus = risk_df[risk_df["risk_score"] >= 2]
+        medium_risk_skus = risk_df[(risk_df["risk_score"] == 1)]
+        low_risk_skus = risk_df[risk_df["risk_score"] == 0]
+
+        risk_metrics = st.columns(3)
+        risk_metrics[0].metric("🔴 High Risk SKUs", len(high_risk_skus), help="2+ risk factors")
+        risk_metrics[1].metric("🟡 Medium Risk SKUs", len(medium_risk_skus), help="1 risk factor")
+        risk_metrics[2].metric("🟢 Low Risk SKUs", len(low_risk_skus), help="No risk factors")
+
+        if len(high_risk_skus) > 0:
+            st.warning(f"⚠️ {len(high_risk_skus)} SKUs have multiple risk factors. Review before planning.")
+            st.dataframe(
+                high_risk_skus[["sku_code", "description", "width_mm", "depth_mm", "height_mm", "weight_kg", "risk_flags"]].head(20),
+                use_container_width=True,
+            )
+
+    # === Article Customization ===
+    with st.expander("🛠️ Article-Level Customization", expanded=False):
+        st.markdown("#### Adjust Individual SKU Parameters")
+        st.caption("Fine-tune specific articles before planning (advanced)")
+
+        # Allow filtering by SKU code or description
+        search_sku = st.text_input("Search by SKU code", key="search_sku_code", placeholder="e.g., 12345")
+        search_desc = st.text_input("Search by description", key="search_desc", placeholder="e.g., KITCHEN")
+
+        filtered_customize_df = df.copy()
+        if search_sku:
+            filtered_customize_df = filtered_customize_df[
+                filtered_customize_df["sku_code"].astype(str).str.contains(search_sku, case=False, na=False)
+            ]
+        if search_desc:
+            filtered_customize_df = filtered_customize_df[
+                filtered_customize_df["description"].str.contains(search_desc, case=False, na=False)
+            ]
+
+        st.caption(f"Showing {len(filtered_customize_df)} of {len(df)} eligible SKUs")
+
+        if len(filtered_customize_df) > 0:
+            # Display editable dataframe (read-only for now, can be enhanced)
+            st.dataframe(
+                filtered_customize_df[["sku_code", "description", "width_mm", "depth_mm", "height_mm", "weight_kg", "weekly_demand", "velocity_band"]].head(50),
+                use_container_width=True,
+            )
+            st.info("💡 Advanced customization (per-SKU overrides) will be available in future releases. For now, adjust filters in Step 4.")
 
     if st.button("Run planning", type="primary"):
         try:
@@ -933,11 +1112,14 @@ def render_step_plan():
                     per_sku_units_col="assq_units",
                 )
             # Build layout with calculated planning data
+            # Use configured bays from Step 2 (or required bays if smaller)
+            bays_to_use = min(configured_bays, required_bays) if bay_deficit <= 0 else configured_bays
+
             planning_df, blocks, columns_summary = allocation.build_layout(
                 planning_df,
-                bays=int(st.session_state["bay_count"]),
-                columns_per_bay=int(st.session_state["columns_per_bay"]),
-                rows_per_column=int(st.session_state["rows_per_column"]),
+                bays=bays_to_use,
+                columns_per_bay=configured_columns,
+                rows_per_column=configured_rows,
                 units_per_column=units_per_column,
                 max_weight_per_column_kg=float(st.session_state["max_weight_per_column"]),
                 per_sku_units_col="assq_units",
@@ -956,12 +1138,17 @@ def render_step_plan():
 
     if planning_df is not None:
         overweight_cols = 0
-        if cols_summary is not None and "overweight_flag" in cols_summary.columns:
-            overweight_cols = int(cols_summary["overweight_flag"].sum())
+        bays_used = 0
+        if cols_summary is not None:
+            if "overweight_flag" in cols_summary.columns:
+                overweight_cols = int(cols_summary["overweight_flag"].sum())
+            if "bay" in cols_summary.columns:
+                bays_used = int(cols_summary["bay"].nunique())
+
         metrics_cols = st.columns(4)
         metrics_cols[0].metric("SKUs planned", format_metric(len(planning_df)))
-        metrics_cols[1].metric("Bays", format_metric(st.session_state.get("bay_count", 0)))
-        metrics_cols[2].metric("Columns per bay", format_metric(st.session_state.get("columns_per_bay")))
+        metrics_cols[1].metric("Bays used", format_metric(bays_used))
+        metrics_cols[2].metric("Columns per bay", format_metric(configured_columns))
         metrics_cols[3].metric("Overweight columns", format_metric(overweight_cols))
         if "assq_needs_review" in planning_df.columns:
             review_count = int(planning_df["assq_needs_review"].sum())
