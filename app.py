@@ -22,6 +22,7 @@ import pandas as pd
 import streamlit as st
 
 from core import allocation, data_ingest, eligibility, exports
+from core.article_library import ArticleLibrary
 from rag import rag_service
 from visualization import planogram_2d
 from visualization.viewer_3d import embed_3d_viewer, get_configuration_suggestions
@@ -34,6 +35,21 @@ if not Path("rag_store.db").exists():
         ingest()
     except Exception:
         pass  # Silently fail if RAG init fails
+
+# Initialize article library (builds from master file if not exists)
+@st.cache_resource
+def get_article_library():
+    """Load article library (cached across app sessions)."""
+    library = ArticleLibrary()
+
+    # Build library from master file if empty
+    master_file = Path(__file__).parent / "ref" / "cp_input1.xlsx"
+    if master_file.exists():
+        stats = library.get_stats()
+        if stats['total_articles'] == 0:
+            library.import_from_excel(str(master_file), sheet_name='rpt')
+
+    return library
 
 
 APP_TITLE = "Storeganizer Planning Tool"
@@ -63,6 +79,8 @@ def init_session_state():
         "chat_history": [],
         "inventory_raw": None,
         "inventory_filtered": None,
+        "rejected_items": None,
+        "rejected_count": 0,
         "inventory_filename": None,
         "column_status": None,
         "rejection_reasons": {},
@@ -100,6 +118,8 @@ def reset_inventory_state():
     """Clear inventory-dependent session data."""
     st.session_state["inventory_raw"] = None
     st.session_state["inventory_filtered"] = None
+    st.session_state["rejected_items"] = None
+    st.session_state["rejected_count"] = 0
     st.session_state["inventory_filename"] = None
     st.session_state["column_status"] = None
     st.session_state["rejection_reasons"] = {}
@@ -343,7 +363,7 @@ def get_chat_context() -> Dict:
         "preset": st.session_state.get("plan_name", "Storeganizer plan"),
         "bay_count": st.session_state.get("bay_count"),
         "overweight_count": overweight,
-        "reject_count": sum(st.session_state.get("rejection_reasons", {}).values()),
+        "reject_count": st.session_state.get("rejected_count", 0),
         "sku_count": len(filtered) if isinstance(filtered, pd.DataFrame) else None,
         "columns_per_bay": st.session_state.get("columns_per_bay"),
         "rows_per_column": st.session_state.get("rows_per_column"),
@@ -623,6 +643,15 @@ def render_step_upload():
         try:
             df = data_ingest.load_inventory_file(uploaded_file)
             df = add_assq_columns(df)
+
+            # Enrich with article library (auto-fill missing dimensions)
+            library = get_article_library()
+            if 'sku_code' in df.columns:
+                df_enriched, enrich_stats = library.enrich_dataframe(df, 'sku_code')
+                if enrich_stats['found_in_library'] > 0:
+                    st.info(f"📚 Article Library: Auto-filled dimensions for {enrich_stats['found_in_library']}/{enrich_stats['total']} articles from previous uploads")
+                df = df_enriched
+
             st.session_state["inventory_raw"] = df
             st.session_state["inventory_filename"] = uploaded_file.name
             st.session_state["column_status"] = data_ingest.get_column_status(df)
@@ -633,17 +662,26 @@ def render_step_upload():
             st.error(f"Unexpected error reading file: {exc}")
 
     st.markdown("---")
-    st.info("💡 **No file handy?** Try our example IKEA dataset (5,191 SKUs) to explore all features without uploading your own data.")
-    if st.button("📂 Load Example Dataset (5,191 SKUs)"):
-        example_file_path = Path(__file__).parent / "ref" / "cp_input1.xlsx"
+    st.info("💡 **No file handy?** Try our included sample dataset (80 SKUs) to explore the full flow without your own file.")
+    if st.button("📂 Load Example Dataset (80 SKUs)"):
+        example_file_path = Path(__file__).parent / "sample_inventory.csv"
         if example_file_path.exists():
             try:
                 df = data_ingest.load_inventory_file(str(example_file_path))
                 df = add_assq_columns(df)
+
+                # Enrich with article library (auto-fill missing dimensions)
+                library = get_article_library()
+                if 'sku_code' in df.columns:
+                    df_enriched, enrich_stats = library.enrich_dataframe(df, 'sku_code')
+                    if enrich_stats['found_in_library'] > 0:
+                        st.info(f"📚 Article Library: Auto-filled dimensions for {enrich_stats['found_in_library']}/{enrich_stats['total']} articles")
+                    df = df_enriched
+
                 st.session_state["inventory_raw"] = df
                 st.session_state["inventory_filename"] = example_file_path.name
                 st.session_state["column_status"] = data_ingest.get_column_status(df)
-                st.success(f"✅ Loaded {len(df):,} example SKUs from IKEA inventory")
+                st.success(f"✅ Loaded {len(df):,} example SKUs from included sample")
                 st.info("👉 Proceed to **Step 4** to configure eligibility filters.")
                 go_to_step(4)
             except Exception as exc:
@@ -699,15 +737,7 @@ def render_step_filter():
     st.caption("Pick demand filters, confirm the pocket limits from Step 2, then apply eligibility.")
 
     st.markdown("### Planning mode")
-    st.radio(
-        "Pocket allocation",
-        options=["Single pocket per SKU (recommended)", "Multi-pocket stacking (coming soon)"],
-        index=0,
-        disabled=False,
-        help="Single pocket: one SKU per pocket. Multi-pocket stacking available in future release.",
-    )
-    # Always use single pocket mode
-    st.session_state["single_pocket_per_sku"] = True
+    st.info("Auto-stacking (ASSQ) is enabled: each SKU uses its calculated units-per-column based on dimensions. Single-pocket override will arrive in a future release.")
 
     st.markdown("### Demand & velocity")
     with st.form("eligibility_form"):
@@ -822,7 +852,7 @@ def render_step_filter():
 
     filtered = st.session_state.get("inventory_filtered")
     if filtered is not None:
-        dropped = sum(st.session_state.get("rejection_reasons", {}).values())
+        dropped = st.session_state.get("rejected_count", 0)
         st.success(f"Eligible items: {len(filtered)} rows. Rejected: {dropped}.")
         st.text(eligibility.get_rejection_summary(st.session_state.get("rejection_reasons", {})))
         if "assq_needs_review" in filtered.columns:
@@ -854,7 +884,7 @@ def apply_filters():
 
     p_w, p_d, p_h, p_wt = get_active_pocket_limits()
 
-    filtered_df, rejected_count, rejection_reasons = eligibility.apply_all_filters(
+    filtered_df, rejected_df, rejected_count, rejection_reasons = eligibility.apply_all_filters_detailed(
         df_with_velocity,
         max_width=st.session_state.get("elig_max_w", p_w),
         max_depth=st.session_state.get("elig_max_d", p_d),
@@ -867,13 +897,17 @@ def apply_filters():
     )
 
     st.session_state["inventory_filtered"] = filtered_df
+    st.session_state["rejected_items"] = rejected_df
+    st.session_state["rejected_count"] = rejected_count
     st.session_state["rejection_reasons"] = rejection_reasons
 
     # Auto-set bay count suggestion based on filtered SKU count
+    columns_needed = int(filtered_df["columns_required"].sum()) if "columns_required" in filtered_df else len(filtered_df)
     suggested_bays = allocation.calculate_bay_requirements(
         sku_count=len(filtered_df),
         columns_per_bay=st.session_state.get("columns_per_bay"),
         rows_per_column=st.session_state.get("rows_per_column"),
+        columns_required_total=columns_needed,
     )
     st.session_state["bay_count"] = suggested_bays
     st.session_state["num_bays"] = suggested_bays
@@ -896,10 +930,12 @@ def render_step_plan():
     configured_rows = int(st.session_state.get("rows_per_column", config.DEFAULT_ROWS_PER_COLUMN))
 
     # Calculate required bays based on eligible SKU count
+    columns_needed = int(df["columns_required"].sum()) if "columns_required" in df else len(df)
     required_bays = allocation.calculate_bay_requirements(
         sku_count=len(df),
         columns_per_bay=configured_columns,
         rows_per_column=configured_rows,
+        columns_required_total=columns_needed,
     )
 
     # Calculate deficit
@@ -941,10 +977,12 @@ def render_step_plan():
                 st.warning(f"🔧 Excluded {excluded_count} lowest-priority SKUs to fit capacity. Now planning with {len(df)} SKUs.")
 
                 # Recalculate required bays
+                columns_needed = int(df["columns_required"].sum()) if "columns_required" in df else len(df)
                 required_bays = allocation.calculate_bay_requirements(
                     sku_count=len(df),
                     columns_per_bay=configured_columns,
                     rows_per_column=configured_rows,
+                    columns_required_total=columns_needed,
                 )
                 bay_deficit = required_bays - configured_bays
     else:
@@ -1099,37 +1137,15 @@ def render_step_plan():
 
     if st.button("Run planning", type="primary"):
         try:
-            # Check if single pocket per SKU mode is enabled
-            single_pocket_mode = st.session_state.get("single_pocket_per_sku", True)
+            df_with_assq = add_assq_columns(df)
+            units_per_column = config.DEFAULT_UNITS_PER_COLUMN
 
-            if single_pocket_mode:
-                # Simple mode: 1 pocket per SKU (no ASSQ calculation)
-                df_with_assq = df.copy()
-                df_with_assq["assq_units"] = 1
-                units_per_column = 1
-
-                # Compute planning metrics first
-                planning_df = allocation.compute_planning_metrics(
-                    df_with_assq,
-                    units_per_column=units_per_column,
-                    max_weight_per_column_kg=st.session_state["max_weight_per_column"],
-                    per_sku_units_col="assq_units",
-                )
-
-                # Override: exactly 1 unit per SKU (1 pocket per SKU)
-                planning_df["units_required"] = 1
-                planning_df["columns_required"] = 1
-            else:
-                # Multi-pocket mode: calculate ASSQ for stacking
-                df_with_assq = add_assq_columns(df)
-                units_per_column = config.DEFAULT_UNITS_PER_COLUMN
-
-                planning_df = allocation.compute_planning_metrics(
-                    df_with_assq,
-                    units_per_column=units_per_column,
-                    max_weight_per_column_kg=st.session_state["max_weight_per_column"],
-                    per_sku_units_col="assq_units",
-                )
+            planning_df = allocation.compute_planning_metrics(
+                df_with_assq,
+                units_per_column=units_per_column,
+                max_weight_per_column_kg=st.session_state["max_weight_per_column"],
+                per_sku_units_col="assq_units",
+            )
             # Build layout with calculated planning data
             # Use configured bays from Step 2 (or required bays if smaller)
             bays_to_use = min(configured_bays, required_bays) if bay_deficit <= 0 else configured_bays
@@ -1220,9 +1236,10 @@ def render_step_review():
     )
 
     planogram_layout = exports.create_planogram_layout(blocks)
+    rejection_report = exports.create_rejection_report(st.session_state.get("rejected_items"))
 
     # Export buttons
-    export_cols = st.columns(3)
+    export_cols = st.columns(4)
 
     with export_cols[0]:
         download_excel(
@@ -1247,6 +1264,17 @@ def render_step_review():
             st.caption(f"{len(planogram_layout)} cell assignments")
 
     with export_cols[2]:
+        download_excel(
+            label="🚫 Eligibility Rejections",
+            df=rejection_report,
+            filename="storeganizer_rejections.xlsx",
+            help="SKUs excluded by eligibility filters with dimensions, weight, forecast, and reason",
+            key="export_rejections",
+        )
+        if rejection_report is not None and len(rejection_report) > 0:
+            st.caption(f"{len(rejection_report)} rejected items")
+
+    with export_cols[3]:
         st.button(
             "📄 Planogram PDF (coming soon)",
             disabled=True,
