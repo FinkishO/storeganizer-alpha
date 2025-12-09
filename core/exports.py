@@ -116,6 +116,47 @@ def create_full_article_report(
     return result
 
 
+def create_rejection_report(rejected_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create report of SKUs excluded by eligibility filters.
+
+    Includes only columns relevant to eligibility review.
+    """
+    if rejected_df is None or len(rejected_df) == 0:
+        return pd.DataFrame()
+
+    cols = [
+        "sku_code",
+        "description",
+        "width_mm",
+        "depth_mm",
+        "height_mm",
+        "weight_kg",
+        "weekly_demand",
+        "stock_weeks",
+        "rejection_reason",
+    ]
+
+    work = rejected_df.copy()
+    for col in cols:
+        if col not in work.columns:
+            work[col] = ""
+
+    report = work[cols].copy()
+    report.columns = [
+        "SKU Code",
+        "Description",
+        "Width (mm)",
+        "Depth (mm)",
+        "Height (mm)",
+        "Weight (kg)",
+        "Weekly Demand",
+        "Stock Weeks",
+        "Rejection Reason",
+    ]
+    return report
+
+
 def create_planogram_layout(blocks: List[CellBlock]) -> pd.DataFrame:
     """
     Create planogram layout file for warehouse implementation.

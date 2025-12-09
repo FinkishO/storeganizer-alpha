@@ -10,7 +10,7 @@ Handles:
 
 from dataclasses import dataclass
 from math import ceil
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -310,6 +310,7 @@ def calculate_bay_requirements(
     sku_count: int,
     columns_per_bay: int = None,
     rows_per_column: int = None,
+    columns_required_total: Optional[int] = None,
 ) -> int:
     """
     Calculate estimated bay requirements based on SKU count.
@@ -318,10 +319,17 @@ def calculate_bay_requirements(
         sku_count: Number of SKUs to accommodate
         columns_per_bay: Columns per bay (defaults to config)
         rows_per_column: Rows per column (defaults to config)
+        columns_required_total: Optional total columns required (overrides SKU-count heuristic)
 
     Returns:
         Estimated number of bays needed
     """
+    # If we know total columns required, base estimate directly on that
+    if columns_required_total is not None:
+        columns_per_bay = columns_per_bay or config.DEFAULT_COLUMNS_PER_BAY
+        cols_needed = max(0, int(columns_required_total))
+        return ceil(cols_needed / columns_per_bay) if cols_needed > 0 else 1
+
     columns_per_bay = columns_per_bay or config.DEFAULT_COLUMNS_PER_BAY
     rows_per_column = rows_per_column or config.DEFAULT_ROWS_PER_COLUMN
 

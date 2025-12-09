@@ -9,7 +9,7 @@ Determines which SKUs can fit in Storeganizer pockets based on:
 - Fragile item exclusions
 """
 
-from typing import Tuple
+from typing import List, Tuple
 import pandas as pd
 
 from config import storeganizer as config
@@ -244,6 +244,124 @@ def apply_all_filters(
     rejected_count = original_count - len(df_filtered)
 
     return df_filtered, rejected_count, rejection_reasons
+
+
+def apply_all_filters_detailed(
+    df: pd.DataFrame,
+    max_width: float = None,
+    max_depth: float = None,
+    max_height: float = None,
+    max_weight_kg: float = None,
+    velocity_band: str = "All",
+    max_weekly_demand: float = None,
+    allow_squeeze: bool = False,
+    remove_fragile: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, int, dict]:
+    """
+    Apply eligibility filters and return both eligible and rejected SKUs with reasons.
+
+    Args mirror apply_all_filters, but this additionally returns the rejected items
+    with a human-readable rejection_reason column.
+
+    Returns:
+        eligible_df, rejected_df, rejected_count, rejection_reasons_dict
+    """
+    if df is None or len(df) == 0:
+        return df, pd.DataFrame(), 0, {}
+
+    # Defaults
+    max_width = max_width or config.DEFAULT_POCKET_WIDTH
+    max_depth = max_depth or config.DEFAULT_POCKET_DEPTH
+    max_height = max_height or config.DEFAULT_POCKET_HEIGHT
+    max_weight_kg = max_weight_kg or config.DEFAULT_POCKET_WEIGHT_LIMIT
+    max_weekly_demand = max_weekly_demand or config.DEFAULT_FORECAST_THRESHOLD
+
+    df_work = df.copy()
+
+    # Normalized numeric columns
+    width = pd.to_numeric(df_work.get("width_mm"), errors="coerce").fillna(0.0)
+    depth = pd.to_numeric(df_work.get("depth_mm"), errors="coerce").fillna(0.0)
+    height = pd.to_numeric(df_work.get("height_mm"), errors="coerce").fillna(0.0)
+    weight = pd.to_numeric(df_work.get("weight_kg"), errors="coerce").fillna(0.0)
+    weekly_demand = pd.to_numeric(df_work.get("weekly_demand"), errors="coerce").fillna(0.0)
+
+    width_multiplier = config.SQUEEZE_WIDTH_MULTIPLIER if allow_squeeze else 1.0
+    effective_max_width = max_width * width_multiplier
+
+    # Individual checks
+    dimension_ok = (
+        (width > 0)
+        & (depth > 0)
+        & (height > 0)
+        & (width <= effective_max_width)
+        & (depth <= max_depth)
+        & (height <= max_height)
+    )
+
+    weight_ok = (weight > 0) & (weight <= max_weight_kg)
+
+    if velocity_band == "All" or "velocity_band" not in df_work.columns:
+        velocity_ok = pd.Series(True, index=df_work.index)
+    else:
+        if velocity_band == "A":
+            allowed = ["A"]
+        elif velocity_band == "B":
+            allowed = ["A", "B"]
+        elif velocity_band == "C":
+            allowed = ["A", "B", "C"]
+        else:
+            allowed = []
+        velocity_ok = df_work["velocity_band"].isin(allowed)
+
+    if "weekly_demand" not in df_work.columns:
+        forecast_ok = pd.Series(True, index=df_work.index)
+    else:
+        forecast_ok = weekly_demand <= max_weekly_demand
+
+    if not remove_fragile or "description" not in df_work.columns:
+        fragile_ok = pd.Series(True, index=df_work.index)
+    else:
+        pattern = "|".join(config.FRAGILE_KEYWORDS)
+        fragile_ok = ~df_work["description"].str.contains(pattern, case=False, na=False)
+
+    # Build reason strings
+    reason_strings = []
+    for idx in df_work.index:
+        row_reasons: List[str] = []
+        if not dimension_ok.loc[idx]:
+            row_reasons.append("Dimensions exceed limits or missing")
+        if not weight_ok.loc[idx]:
+            row_reasons.append("Over weight limit")
+        if not velocity_ok.loc[idx]:
+            row_reasons.append(f"Velocity band excluded ({df_work.at[idx, 'velocity_band']})")
+        if not forecast_ok.loc[idx]:
+            row_reasons.append("Above forecast threshold")
+        if not fragile_ok.loc[idx]:
+            row_reasons.append("Fragile item excluded")
+        reason_strings.append("; ".join(row_reasons))
+
+    reason_series = pd.Series(reason_strings, index=df_work.index)
+
+    eligible_mask = dimension_ok & weight_ok & velocity_ok & forecast_ok & fragile_ok
+    eligible_df = df_work[eligible_mask].copy()
+    rejected_df = df_work[~eligible_mask].copy()
+    rejected_df["rejection_reason"] = reason_series[~eligible_mask]
+
+    # Use the existing sequential logic for aggregated counts
+    _, _, rejection_reasons = apply_all_filters(
+        df,
+        max_width=max_width,
+        max_depth=max_depth,
+        max_height=max_height,
+        max_weight_kg=max_weight_kg,
+        velocity_band=velocity_band,
+        max_weekly_demand=max_weekly_demand,
+        allow_squeeze=allow_squeeze,
+        remove_fragile=remove_fragile,
+    )
+
+    rejected_count = len(rejected_df)
+    return eligible_df, rejected_df, rejected_count, rejection_reasons
 
 
 def get_rejection_summary(rejection_reasons: dict) -> str:

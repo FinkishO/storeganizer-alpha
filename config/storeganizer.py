@@ -8,18 +8,18 @@ All Storeganizer product specifications, dimensions, and business rules.
 # PRODUCT SPECIFICATIONS
 # ===========================
 
-# Default pocket/cell dimensions (mm)
-DEFAULT_POCKET_WIDTH = 450  # Medium pocket width
-DEFAULT_POCKET_DEPTH = 300  # Medium pocket depth
-DEFAULT_POCKET_HEIGHT = 300  # Medium pocket height
+# Default pocket/cell dimensions (mm) - align with Medium preset
+DEFAULT_POCKET_WIDTH = 450
+DEFAULT_POCKET_DEPTH = 500
+DEFAULT_POCKET_HEIGHT = 450
 
 # Weight limits (kg)
 DEFAULT_POCKET_WEIGHT_LIMIT = 20.0
-DEFAULT_COLUMN_WEIGHT_LIMIT = 100.0  # For largest configuration
+DEFAULT_COLUMN_WEIGHT_LIMIT = 100.0  # Column overweight flag threshold
 
 # Structure configuration
-DEFAULT_COLUMNS_PER_BAY = 15  # Medium, 2700 mm rack (6-5-4 formation)
-DEFAULT_ROWS_PER_COLUMN = 6   # Pockets per column for medium
+DEFAULT_COLUMNS_PER_BAY = 8   # Medium, 8 columns per bay
+DEFAULT_ROWS_PER_COLUMN = 5   # Pockets per column for medium
 DEFAULT_UNITS_PER_COLUMN = 30
 
 # ===========================
@@ -31,27 +31,27 @@ STANDARD_CONFIGS = {
         "name": "Extra Small",
         "description": "Compact setup for smaller operations",
         "pocket_width": 300,
-        "pocket_depth": 260,
-        "pocket_height": 150,
-        "pocket_weight_limit": 20.0,
-        "columns_per_bay": 30,  # 2700 mm rack: 9-7-7-7 formation
-        "rows_per_column": 13,  # pockets per column
-        "cells_per_bay": 390,   # 30 columns × 13 pockets
-        "typical_bays": "2700mm rack",
+        "pocket_depth": 400,
+        "pocket_height": 350,
+        "pocket_weight_limit": 15.0,
+        "columns_per_bay": 6,
+        "rows_per_column": 4,
+        "cells_per_bay": 24,  # 6 columns × 4 rows
+        "typical_bays": "2-4 bays",
         "image": "ref/sg_xs.png",
         "price_per_bay_eur": None,  # Placeholder for future
     },
     "small": {
         "name": "Small",
         "description": "Standard configuration for growing businesses",
-        "pocket_width": 300,
-        "pocket_depth": 300,
-        "pocket_height": 300,
-        "pocket_weight_limit": 20.0,
-        "columns_per_bay": 23,  # 2700 mm rack: 9-7-7 formation
-        "rows_per_column": 6,   # pockets per column
-        "cells_per_bay": 138,   # 23 columns × 6 pockets
-        "typical_bays": "2700mm rack",
+        "pocket_width": 400,
+        "pocket_depth": 450,
+        "pocket_height": 400,
+        "pocket_weight_limit": 18.0,
+        "columns_per_bay": 7,
+        "rows_per_column": 5,
+        "cells_per_bay": 35,  # 7 columns × 5 rows
+        "typical_bays": "4-8 bays",
         "image": "ref/sg_s.png",
         "price_per_bay_eur": None,
     },
@@ -59,28 +59,28 @@ STANDARD_CONFIGS = {
         "name": "Medium",
         "description": "Most popular - balanced capacity and flexibility",
         "pocket_width": 450,
-        "pocket_depth": 300,
-        "pocket_height": 300,
+        "pocket_depth": 500,
+        "pocket_height": 450,
         "pocket_weight_limit": 20.0,
-        "columns_per_bay": 15,  # 2700 mm rack: 6-5-4 formation
-        "rows_per_column": 6,   # pockets per column
-        "cells_per_bay": 90,    # 15 columns × 6 pockets
-        "typical_bays": "2700mm rack",
+        "columns_per_bay": 8,
+        "rows_per_column": 5,
+        "cells_per_bay": 40,  # 8 columns × 5 rows
+        "typical_bays": "6-12 bays",
         "image": "ref/sg_m.png",
         "price_per_bay_eur": None,
         "recommended": True,  # Flag for UI
     },
     "large": {
         "name": "Large",
-        "description": "High-capacity option for big inventories",
-        "pocket_width": 450,
-        "pocket_depth": 500,
-        "pocket_height": 450,
-        "pocket_weight_limit": 20.0,
-        "columns_per_bay": 10,  # 2700 mm rack: 6-4 formation
-        "rows_per_column": 4,   # pockets per column
-        "cells_per_bay": 40,    # 10 columns × 4 pockets
-        "typical_bays": "2700mm rack",
+        "description": "High-capacity for warehouses with extensive inventory",
+        "pocket_width": 500,
+        "pocket_depth": 550,
+        "pocket_height": 500,
+        "pocket_weight_limit": 25.0,
+        "columns_per_bay": 10,
+        "rows_per_column": 6,
+        "cells_per_bay": 60,  # 10 columns × 6 rows
+        "typical_bays": "8-20 bays",
         "image": "ref/sg_l.png",
         "price_per_bay_eur": None,
     },
