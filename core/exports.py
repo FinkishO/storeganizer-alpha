@@ -52,30 +52,31 @@ def create_full_article_report(
         lambda x: 'Eligible' if x in eligible_skus else 'Rejected'
     )
 
-    # Add rejection reason (simplified)
+    # Add rejection reason - use detailed reasons from eligibility filter if available
     def get_rejection_reason(row):
         if row['Status'] == 'Eligible':
             return ''
 
+        # First check if we already have a detailed rejection reason
+        if 'rejection_reason' in row.index and row.get('rejection_reason'):
+            return row['rejection_reason']
+
         sku = str(row['sku_code'])
 
-        # Check dimension rejection
+        # Fall back to heuristics only if no detailed reason provided
+        # (only hardcoded filters: dimensions and weight)
         if row.get('width_mm', 0) == 0 or row.get('depth_mm', 0) == 0 or row.get('height_mm', 0) == 0:
             return 'Missing dimensions'
 
-        # Check if oversized (simple heuristic - actual limits from config)
+        # Check if oversized (uses largest pocket - Large: 450x500x450)
         if row.get('width_mm', 0) > 450 or row.get('depth_mm', 0) > 500 or row.get('height_mm', 0) > 450:
-            return 'Oversized'
+            return f"Oversized (W:{row.get('width_mm', 0):.0f} D:{row.get('depth_mm', 0):.0f} H:{row.get('height_mm', 0):.0f})"
 
-        # Check weight
+        # Check weight (hardcoded 20kg limit)
         if row.get('weight_kg', 0) > 20:
-            return 'Overweight'
+            return f"Overweight ({row.get('weight_kg', 0):.1f}kg > 20kg)"
 
-        # Check demand
-        if row.get('weekly_demand', 0) > 4.0:
-            return 'High demand (fast mover)'
-
-        return 'Other'
+        return 'Filtered by configuration'
 
     report['Rejection Reason'] = report.apply(get_rejection_reason, axis=1)
 

@@ -9,17 +9,24 @@ All Storeganizer product specifications, dimensions, and business rules.
 # ===========================
 
 # Default pocket/cell dimensions (mm) - align with Medium preset
+# FROM OFFICIAL BUYING GUIDE: Medium = 450 x 300 x 300 mm
 DEFAULT_POCKET_WIDTH = 450
-DEFAULT_POCKET_DEPTH = 500
-DEFAULT_POCKET_HEIGHT = 450
+DEFAULT_POCKET_DEPTH = 300
+DEFAULT_POCKET_HEIGHT = 300
 
 # Weight limits (kg)
 DEFAULT_POCKET_WEIGHT_LIMIT = 20.0
 DEFAULT_COLUMN_WEIGHT_LIMIT = 100.0  # Column overweight flag threshold
 
-# Structure configuration
-DEFAULT_COLUMNS_PER_BAY = 8   # Medium, 8 columns per bay
-DEFAULT_ROWS_PER_COLUMN = 5   # Pockets per column for medium
+# Structure configuration (Medium preset)
+# TERMINOLOGY from buying guide:
+#   - "rows deep" = depth rows front-to-back (M=3, L=2, XS=4)
+#   - "columns per row" = columns in each depth row [6,5,4] for Medium
+#   - "pockets per column" = vertical stacking (M=6, L=4, XS=13)
+DEFAULT_COLUMNS_PER_BAY = 6   # Medium front row columns
+DEFAULT_ROWS_DEEP = 3         # Medium = 3 rows front-to-back
+DEFAULT_POCKETS_PER_COLUMN = 6  # Medium = 6 pockets stacked vertically
+DEFAULT_ROWS_PER_COLUMN = 6   # DEPRECATED: use DEFAULT_POCKETS_PER_COLUMN
 DEFAULT_UNITS_PER_COLUMN = 30
 
 # ===========================
@@ -27,59 +34,78 @@ DEFAULT_UNITS_PER_COLUMN = 30
 # ===========================
 
 STANDARD_CONFIGS = {
+    # FROM OFFICIAL STOREGANIZER BUYING GUIDE (storeganizer_buying_guide.pdf page 2)
+    # Max weight per Pocket: 20kg (ALL sizes)
+    # Max weight per column: 100kg
     "xs": {
         "name": "Extra Small",
-        "description": "Compact setup for smaller operations",
-        "pocket_width": 300,
-        "pocket_depth": 400,
-        "pocket_height": 350,
-        "pocket_weight_limit": 15.0,
-        "columns_per_bay": 6,
-        "rows_per_column": 4,
-        "cells_per_bay": 24,  # 6 columns × 4 rows
-        "typical_bays": "2-4 bays",
+        "description": "Compact pockets for small items",
+        "pocket_width": 300,   # From buying guide
+        "pocket_depth": 260,   # From buying guide
+        "pocket_height": 150,  # From buying guide
+        "pocket_weight_limit": 20.0,  # Same for all sizes
+        "pockets_per_column": 13,  # Vertical stacking
+        "rows_deep": 4,  # 4 rows front-to-back
+        "columns_per_row_pattern": [9, 7, 7, 7],  # Columns in each depth row (front→back)
+        "columns_per_bay": 9,  # Front row only (for backward compat)
+        "total_columns": 30,  # sum([9,7,7,7]) = 30
+        "rows_per_column": 13,  # DEPRECATED: use pockets_per_column
+        "cells_per_bay": 390,  # 30 columns × 13 pockets = 390
+        "typical_bays": "Small installations",
         "image": "ref/sg_xs.png",
-        "price_per_bay_eur": None,  # Placeholder for future
+        "price_per_bay_eur": None,
     },
     "small": {
         "name": "Small",
-        "description": "Standard configuration for growing businesses",
-        "pocket_width": 400,
-        "pocket_depth": 450,
-        "pocket_height": 400,
-        "pocket_weight_limit": 18.0,
-        "columns_per_bay": 7,
-        "rows_per_column": 5,
-        "cells_per_bay": 35,  # 7 columns × 5 rows
+        "description": "Standard small item storage",
+        "pocket_width": 300,   # From buying guide
+        "pocket_depth": 300,   # From buying guide
+        "pocket_height": 300,  # From buying guide
+        "pocket_weight_limit": 20.0,
+        "pockets_per_column": 6,  # Vertical stacking
+        "rows_deep": 3,  # 3 rows front-to-back
+        "columns_per_row_pattern": [9, 7, 7],  # Columns in each depth row (front→back)
+        "columns_per_bay": 9,  # Front row only (for backward compat)
+        "total_columns": 23,  # sum([9,7,7]) = 23
+        "rows_per_column": 6,  # DEPRECATED: use pockets_per_column
+        "cells_per_bay": 138,  # 23 columns × 6 pockets = 138
         "typical_bays": "4-8 bays",
         "image": "ref/sg_s.png",
         "price_per_bay_eur": None,
     },
     "medium": {
         "name": "Medium",
-        "description": "Most popular - balanced capacity and flexibility",
-        "pocket_width": 450,
-        "pocket_depth": 500,
-        "pocket_height": 450,
+        "description": "Most popular - balanced capacity",
+        "pocket_width": 450,   # From buying guide
+        "pocket_depth": 300,   # From buying guide (NOT 500!)
+        "pocket_height": 300,  # From buying guide (NOT 450!)
         "pocket_weight_limit": 20.0,
-        "columns_per_bay": 8,
-        "rows_per_column": 5,
-        "cells_per_bay": 40,  # 8 columns × 5 rows
+        "pockets_per_column": 6,  # Vertical stacking
+        "rows_deep": 3,  # 3 rows front-to-back
+        "columns_per_row_pattern": [6, 5, 4],  # Columns in each depth row (front→back)
+        "columns_per_bay": 6,  # Front row only (for backward compat)
+        "total_columns": 15,  # sum([6,5,4]) = 15
+        "rows_per_column": 6,  # DEPRECATED: use pockets_per_column
+        "cells_per_bay": 90,  # 15 columns × 6 pockets = 90
         "typical_bays": "6-12 bays",
         "image": "ref/sg_m.png",
         "price_per_bay_eur": None,
-        "recommended": True,  # Flag for UI
+        "recommended": True,
     },
     "large": {
         "name": "Large",
-        "description": "High-capacity for warehouses with extensive inventory",
-        "pocket_width": 500,
-        "pocket_depth": 550,
-        "pocket_height": 500,
-        "pocket_weight_limit": 25.0,
-        "columns_per_bay": 10,
-        "rows_per_column": 6,
-        "cells_per_bay": 60,  # 10 columns × 6 rows
+        "description": "Larger items, deeper pockets",
+        "pocket_width": 450,   # From buying guide (NOT 500!)
+        "pocket_depth": 500,   # From buying guide
+        "pocket_height": 450,  # From buying guide
+        "pocket_weight_limit": 20.0,  # Same 20kg limit (NOT 25!)
+        "pockets_per_column": 4,  # Vertical stacking
+        "rows_deep": 2,  # 2 rows front-to-back
+        "columns_per_row_pattern": [6, 4],  # Columns in each depth row (front→back)
+        "columns_per_bay": 6,  # Front row only (for backward compat)
+        "total_columns": 10,  # sum([6,4]) = 10
+        "rows_per_column": 4,  # DEPRECATED: use pockets_per_column
+        "cells_per_bay": 40,  # 10 columns × 4 pockets = 40
         "typical_bays": "8-20 bays",
         "image": "ref/sg_l.png",
         "price_per_bay_eur": None,
@@ -227,8 +253,23 @@ VISUALIZATION_URLS = {
 # BUSINESS RULES
 # ===========================
 
-# Default forecast threshold (weekly demand ceiling for filtering)
-DEFAULT_FORECAST_THRESHOLD = 4.0
+# DEPRECATED: Old EWS-based filtering (wrong approach - doesn't account for pocket capacity)
+DEFAULT_FORECAST_THRESHOLD = 4.0  # DEPRECATED - kept for backward compat only
+
+# Stockweeks-based eligibility (CORRECT approach)
+# Stockweeks = ASSQ / EWS = how many weeks of stock fit in one pocket
+# - If stockweeks < min → item sells too fast (constant replenishment needed)
+# - If stockweeks > max → item is too slow (wasting pocket space)
+MIN_STOCKWEEKS = 1.0          # Minimum weeks coverage (IKEA default)
+MAX_STOCKWEEKS = 26.0         # Maximum weeks (6 months, for 3PL use cases)
+USE_STOCKWEEKS_FILTER = True  # Set False to use old EWS filter
+
+# User-configurable filter options (defaults for UI)
+DEFAULT_REMOVE_FRAGILE = False      # Whether to exclude fragile items
+DEFAULT_ALLOW_ROTATION = True       # Allow L/W swap in ASSQ calculation
+DEFAULT_ALLOW_FLIP = True           # Allow height swap in ASSQ calculation
+DEFAULT_AIR_BUFFER_PCT = 0.25       # 25% air buffer (Jan's rule)
+DEFAULT_MAX_POCKETS_PER_ARTICLE = 2 # Prefer 1 Large over 2 Medium
 
 # Golden zone placement (ergonomic row placement)
 GOLDEN_ZONE_ROWS = [2, 3]  # Middle rows for high-velocity items
