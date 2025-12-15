@@ -1207,12 +1207,15 @@ def rerun_with_refinements():
             whitelist_info = st.session_state.get("whitelist_info", {})
             if whitelist_info.get("detected") and whitelist_info.get("article_numbers"):
                 whitelist_articles = set(str(a).strip() for a in whitelist_info["article_numbers"])
-                # Find article column in enriched_df (check multiple patterns)
+                # Find article column - prioritize sku_code, then article number patterns
+                # NOTE: PA is Product Area (short code), NOT article number - skip it
                 article_col = None
-                for col in enriched_df.columns:
-                    col_lower = col.lower().strip()
-                    if col_lower in ["sku_code", "article number", "article_number", "pa"] or "article" in col_lower:
-                        if "name" not in col_lower:  # Skip "Article Name"
+                if "sku_code" in enriched_df.columns:
+                    article_col = "sku_code"
+                else:
+                    for col in enriched_df.columns:
+                        col_lower = col.lower().strip()
+                        if col_lower in ["article number", "article_number"] or ("article" in col_lower and "name" not in col_lower):
                             article_col = col
                             break
                 if article_col:
