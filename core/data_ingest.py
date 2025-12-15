@@ -52,11 +52,12 @@ def _load_table_with_best_header(xl: pd.ExcelFile, sheet_name: str) -> pd.DataFr
     """
     raw = xl.parse(sheet_name, header=None, dtype=str)
 
-    # Keywords that typically appear in column headers
+    # Keywords that typically appear in column headers (incl. EMM format)
     target_keys = [
         "article", "sku", "description", "name", "width", "length", "height",
         "depth", "weight", "fcst", "forecast", "demand", "stock", "weeks",
-        "pa", "hfb", "price", "kg", "mm", "cm"
+        "pa", "hfb", "price", "kg", "mm", "cm",
+        "selected solution", "multipack", "speedcell", "consumer pack",  # EMM format
     ]
 
     best_idx, best_score = 0, -1
@@ -246,10 +247,11 @@ def load_inventory_file(
 
             xl = pd.ExcelFile(file_like)
 
-            # Smart sheet detection
+            # Smart sheet detection - include EMM format keywords
             keywords = [
                 "article", "sku", "cp width", "cp length", "planning fcst",
-                "description", "demand", "stock"
+                "description", "demand", "stock",
+                "selected solution", "multipack", "speedcell",  # EMM format
             ]
             sheet_name = _find_best_sheet(xl, keywords)
 
@@ -303,3 +305,163 @@ def get_column_status(df: pd.DataFrame) -> dict:
         "optional_present": sorted(list(optional_set & present_cols)),
         "optional_missing": sorted(list(optional_set - present_cols)),
     }
+
+
+def detect_priority_whitelist(file_like, main_df: pd.DataFrame = None) -> dict:
+    """
+    Detect if file has a priority/whitelist indicator.
+
+    Checks for:
+    1. Priority sheets: requested_in_cell, priority, whitelist, country_request, etc.
+    2. Priority columns: country request, hybrid, requested, priority, in_cell, etc.
+
+    Returns:
+        {
+            "detected": bool,
+            "source": "sheet" | "column" | None,
+            "source_name": str (sheet or column name),
+            "article_col": str (column containing article numbers),
+            "article_numbers": list[str] (the whitelist),
+            "count": int,
+            "description": str (human-readable description),
+        }
+    """
+    result = {
+        "detected": False,
+        "source": None,
+        "source_name": None,
+        "article_col": None,
+        "article_numbers": [],
+        "count": 0,
+        "description": None,
+    }
+
+    # === CHECK FOR PRIORITY SHEETS ===
+    priority_sheet_keywords = [
+        "requested", "in_cell", "incell", "priority", "whitelist",
+        "country_request", "country request", "selected", "target"
+    ]
+
+    try:
+        if hasattr(file_like, "seek"):
+            file_like.seek(0)
+        xl = pd.ExcelFile(file_like)
+
+        for sheet_name in xl.sheet_names:
+            sheet_lower = sheet_name.lower().replace(" ", "_")
+            if any(kw in sheet_lower for kw in priority_sheet_keywords):
+                # Found a priority sheet - extract article numbers
+                sheet_df = xl.parse(sheet_name)
+
+                # Find article number column (prefer specific matches over generic)
+                article_col = None
+                # Priority order: article number > sku > item > product > pa
+                priority_patterns = [
+                    ["article number", "article_number", "articlenumber"],
+                    ["sku_code", "sku code", "skucode", "sku"],
+                    ["item number", "item_number", "itemnumber", "item code"],
+                    ["product number", "product_number", "product code"],
+                ]
+                for patterns in priority_patterns:
+                    for col in sheet_df.columns:
+                        col_lower = str(col).lower().strip()
+                        if any(p in col_lower for p in patterns):
+                            if "name" not in col_lower:
+                                article_col = col
+                                break
+                    if article_col:
+                        break
+
+                if article_col and len(sheet_df) > 0:
+                    articles = sheet_df[article_col].dropna().astype(str).str.strip().tolist()
+                    articles = [a for a in articles if a and a.lower() not in ["nan", "none", ""]]
+
+                    if articles:
+                        result["detected"] = True
+                        result["source"] = "sheet"
+                        result["source_name"] = sheet_name
+                        result["article_col"] = article_col
+                        result["article_numbers"] = articles
+                        result["count"] = len(articles)
+                        result["description"] = f"{len(articles)} articles from '{sheet_name}' sheet"
+                        return result
+    except Exception:
+        pass  # Not an Excel file or can't read sheets
+
+    # === CHECK FOR PRIORITY COLUMNS IN MAIN DATA ===
+    if main_df is not None and len(main_df) > 0:
+        # Helper to find article column
+        def find_article_col(df):
+            priority_patterns = [
+                ["article number", "article_number", "articlenumber"],
+                ["sku_code", "sku code", "skucode", "sku"],
+                ["pa"],  # IKEA PA column (last resort)
+            ]
+            for patterns in priority_patterns:
+                for col in df.columns:
+                    col_lower = str(col).lower().strip()
+                    if any(p in col_lower for p in patterns):
+                        if "name" not in col_lower:
+                            return col
+            return None
+
+        # === EMM FORMAT: "Selected Solution" = "Multipack" (highest priority) ===
+        for col in main_df.columns:
+            col_lower = str(col).lower().replace("_", " ")
+            if "selected solution" in col_lower:
+                col_vals = main_df[col].astype(str).str.strip()
+                # EMM logic: "Multipack" = Storeganizer-suitable articles
+                multipack_mask = col_vals.str.lower() == "multipack"
+
+                if multipack_mask.any():
+                    article_col = find_article_col(main_df)
+                    if article_col:
+                        articles = main_df.loc[multipack_mask, article_col].dropna().astype(str).str.strip().tolist()
+                        articles = [a for a in articles if a and a.lower() not in ["nan", "none", ""]]
+
+                        if articles:
+                            result["detected"] = True
+                            result["source"] = "column"
+                            result["source_name"] = col
+                            result["article_col"] = article_col
+                            result["article_numbers"] = articles
+                            result["count"] = len(articles)
+                            result["description"] = f"{len(articles)} Multipack articles (EMM selection)"
+                            return result
+
+        # === BOOLEAN PRIORITY COLUMNS (Y/Yes/1/True values) ===
+        priority_col_keywords = [
+            "country request", "country_request", "countryrequest",
+            "hybrid", "requested", "in_cell", "incell", "in cell",
+            "priority", "selected", "target", "whitelist"
+        ]
+
+        for col in main_df.columns:
+            col_lower = str(col).lower().replace("_", " ")
+
+            for kw in priority_col_keywords:
+                if kw in col_lower:
+                    # Found a priority column - check for Y/1/True values
+                    col_vals = main_df[col].astype(str).str.strip().str.upper()
+
+                    # Check for boolean-like values
+                    positive_mask = col_vals.isin(["Y", "YES", "1", "TRUE", "X", "REQUESTED"])
+
+                    if positive_mask.any():
+                        article_col = find_article_col(main_df)
+
+                        if article_col:
+                            articles = main_df.loc[positive_mask, article_col].dropna().astype(str).str.strip().tolist()
+                            articles = [a for a in articles if a and a.lower() not in ["nan", "none", ""]]
+
+                            if articles:
+                                result["detected"] = True
+                                result["source"] = "column"
+                                result["source_name"] = col
+                                result["article_col"] = article_col
+                                result["article_numbers"] = articles
+                                result["count"] = len(articles)
+                                result["description"] = f"{len(articles)} articles where '{col}' = Y"
+                                return result
+
+    return result
