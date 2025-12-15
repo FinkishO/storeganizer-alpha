@@ -81,8 +81,8 @@ def apply_weight_filter(
         df_work["weight_kg"] = 0
     df_work["weight_kg"] = pd.to_numeric(df_work["weight_kg"], errors="coerce").fillna(0)
 
-    # Reject SKUs with zero/missing weight (invalid data) OR weight exceeding limit
-    return df_work[(df_work["weight_kg"] > 0) & (df_work["weight_kg"] <= max_weight_kg)]
+    # Only reject if weight EXCEEDS limit (allow 0/missing weight - common in input files)
+    return df_work[df_work["weight_kg"] <= max_weight_kg]
 
 
 def apply_velocity_filter(

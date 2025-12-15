@@ -206,7 +206,7 @@ COLUMN_ALIASES = {
         "h (mm)", "h", "ul height (mm)", "ul height", "hoogte", "hauteur"
     ],
     "weight_kg": [
-        "cp weight (kg)", "cp weight", "weight_kg", "weight (kg)", "weight",
+        "cp weight (kg)", "cp weight", "cp max weight", "weight_kg", "weight (kg)", "weight",
         "kg", "ul weight (kg)", "ul weight", "net weight (kg)", "gewicht", "poids",
         "wt"
     ],
