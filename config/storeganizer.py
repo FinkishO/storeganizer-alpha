@@ -262,7 +262,7 @@ DEFAULT_FORECAST_THRESHOLD = 4.0  # DEPRECATED - kept for backward compat only
 # - If stockweeks > max → item is too slow (wasting pocket space)
 MIN_STOCKWEEKS = 1.0          # Minimum weeks coverage (IKEA default)
 MAX_STOCKWEEKS = 26.0         # Maximum weeks (6 months, for 3PL use cases)
-USE_STOCKWEEKS_FILTER = True  # Set False to use old EWS filter
+USE_STOCKWEEKS_FILTER = False # OFF by default - user must explicitly enable in Step 3
 
 # User-configurable filter options (defaults for UI)
 DEFAULT_REMOVE_FRAGILE = False      # Whether to exclude fragile items

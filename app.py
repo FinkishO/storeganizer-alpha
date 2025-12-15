@@ -106,10 +106,10 @@ def init_session_state():
         "num_bays": 5,
         "show_custom_config": False,
         "velocity_band_filter": "All",
-        # Stockweeks filter settings (replaces deprecated forecast_threshold)
+        # Stockweeks filter settings (OFF by default - user enables in Step 3)
         "min_stockweeks": config.MIN_STOCKWEEKS,
         "max_stockweeks": config.MAX_STOCKWEEKS,
-        "use_stockweeks_filter": config.USE_STOCKWEEKS_FILTER,
+        "use_stockweeks_filter": False,  # OFF by default - no velocity filtering unless user enables
         "allow_extra_width": config.ALLOW_SQUEEZE_PACKAGING,
         "remove_fragile": config.DEFAULT_REMOVE_FRAGILE,
         "bay_count": 5,
@@ -578,13 +578,33 @@ def get_smart_rejection_analysis(rejected_df: pd.DataFrame, reasons: dict, confi
             "suggestion": "Fill in dimensions for these articles to unlock eligibility.",
         })
 
-    if demand_series.gt(config.DEFAULT_FORECAST_THRESHOLD).any():
-        fast_movers = int(demand_series.gt(config.DEFAULT_FORECAST_THRESHOLD).sum())
-        insights.append({
-            "title": "Fast movers excluded",
-            "detail": f"{fast_movers} SKUs exceed the weekly demand ceiling ({config.DEFAULT_FORECAST_THRESHOLD}).",
-            "suggestion": "Keep fast movers in carton flow; Storeganizer suits slow/medium velocity items.",
-        })
+    # Stockweeks-based velocity detection (only if stockweeks data available)
+    if "stockweeks" in rejected_df.columns:
+        stockweeks_series = pd.to_numeric(rejected_df.get("stockweeks"), errors="coerce")
+        min_sw = st.session_state.get("min_stockweeks", config.MIN_STOCKWEEKS)
+        max_sw = st.session_state.get("max_stockweeks", config.MAX_STOCKWEEKS)
+
+        # Fast movers (below min stockweeks)
+        too_fast = stockweeks_series < min_sw
+        if too_fast.any():
+            fast_count = int(too_fast.sum())
+            avg_sw = float(stockweeks_series[too_fast].mean())
+            insights.append({
+                "title": "Fast movers excluded",
+                "detail": f"{fast_count} SKUs have stockweeks below {min_sw} (avg: {avg_sw:.1f} weeks).",
+                "suggestion": "These sell too fast for Storeganizer. Keep in carton flow or lower min stockweeks in config.",
+            })
+
+        # Slow movers (above max stockweeks)
+        too_slow = stockweeks_series > max_sw
+        if too_slow.any():
+            slow_count = int(too_slow.sum())
+            avg_sw = float(stockweeks_series[too_slow].mean())
+            insights.append({
+                "title": "Slow movers excluded",
+                "detail": f"{slow_count} SKUs have stockweeks above {max_sw} (avg: {avg_sw:.1f} weeks).",
+                "suggestion": "These are too slow for Storeganizer pockets. Consider archive storage or raise max stockweeks.",
+            })
 
     if not insights and reasons:
         insights.append({
@@ -962,12 +982,13 @@ def render_step_auto_processing():
         return
 
     # === CONFIGURATION SECTION ===
-    with st.expander("Stockweeks Filter", expanded=True):
+    with st.expander("Stockweeks Filter (Optional)", expanded=False):
+        st.caption("Filter articles by velocity - OFF by default (all articles eligible if they fit)")
         use_stockweeks = st.checkbox(
             "Enable stockweeks filter",
-            value=st.session_state.get("use_stockweeks_filter", True),
+            value=st.session_state.get("use_stockweeks_filter", False),
             key="use_stockweeks_filter_input",
-            help="Filter articles based on weeks of stock coverage"
+            help="Filter articles based on weeks of stock coverage (ASSQ/EWS)"
         )
         st.session_state["use_stockweeks_filter"] = use_stockweeks
 
