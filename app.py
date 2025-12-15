@@ -870,7 +870,15 @@ def render_step_upload():
             st.session_state["inventory_raw"] = df
             st.session_state["inventory_filename"] = uploaded_file.name
             st.session_state["column_status"] = data_ingest.get_column_status(df)
+
+            # Detect priority/whitelist (separate sheets or columns)
+            uploaded_file.seek(0)
+            whitelist_info = data_ingest.detect_priority_whitelist(uploaded_file, df)
+            st.session_state["whitelist_info"] = whitelist_info
+
             st.success(f"Loaded {len(df):,} rows from {uploaded_file.name}")
+            if whitelist_info["detected"]:
+                st.info(f"Detected priority list: {whitelist_info['description']}")
         except ValueError as exc:
             st.error(f"File error: {exc}")
         except Exception as exc:  # pragma: no cover - defensive log
@@ -893,47 +901,133 @@ def render_step_upload():
             st.warning("Example file not found in repository.")
 
     if st.session_state.get("inventory_raw") is not None:
-        status = st.session_state.get("column_status") or {}
-        missing_required = status.get("required_missing", [])
-        with st.expander("Column validation", expanded=False):
-            col_a, col_b = st.columns(2)
-            col_a.markdown("**Required present**")
-            col_a.write(status.get("required_present", []))
-            col_b.markdown("**Missing required**")
-            col_b.write(missing_required or "None")
-            st.markdown("**Optional columns detected**")
-            st.write(status.get("optional_present", []))
-
-        # Smart preview: show a representative sample, not just first 10 rows
         raw_df = st.session_state["inventory_raw"]
-        # Quick summary line
-        quality = analyze_data_quality(raw_df)
-        st.success(f"Loaded {len(raw_df):,} SKUs | {quality.get('completeness_score', 0)}% complete")
 
-        with st.expander("Data preview", expanded=False):
-            stat_cols = st.columns(4)
-            stat_cols[0].metric("Total SKUs", f"{len(raw_df):,}")
+        # Relevance-based health analysis
+        health = exports.analyze_file_health(raw_df)
+        total = health["total"]
+        ready = health["ready"]
+        needs_data = health["needs_data"]
+        irrelevant = health["irrelevant"]
+        relevant = health["relevant"]
+        data_ranges = health["data_ranges"]
+        columns_found = health["columns_found"]
+        missing_breakdown = health.get("missing_breakdown", {})
+        irrelevant_breakdown = health.get("irrelevant_breakdown", {})
+        top_ready = health["top_ready"]
+        top_needs_data = health["top_needs_data"]
+        top_irrelevant = health["top_irrelevant"]
 
-            if "weight_kg" in raw_df.columns:
-                weights = pd.to_numeric(raw_df["weight_kg"], errors="coerce")
-                under_limit = (weights <= config.DEFAULT_POCKET_WEIGHT_LIMIT).sum()
-                stat_cols[1].metric("Weight OK", f"{under_limit:,}")
+        # === RELEVANCE SUMMARY ===
+        # Key insight: of RELEVANT articles, how many are ready vs need data?
+        relevant_pct = int((relevant / total) * 100) if total > 0 else 0
+        ready_of_relevant_pct = int((ready / relevant) * 100) if relevant > 0 else 0
 
-            if all(c in raw_df.columns for c in ["width_mm", "depth_mm", "height_mm"]):
-                w = pd.to_numeric(raw_df["width_mm"], errors="coerce")
-                d = pd.to_numeric(raw_df["depth_mm"], errors="coerce")
-                h = pd.to_numeric(raw_df["height_mm"], errors="coerce")
-                fits_default = ((w <= config.DEFAULT_POCKET_WIDTH) &
-                               (d <= config.DEFAULT_POCKET_DEPTH) &
-                               (h <= config.DEFAULT_POCKET_HEIGHT)).sum()
-                stat_cols[2].metric("Fits Pocket", f"{fits_default:,}")
+        if irrelevant > 0:
+            st.info(f"**{total:,} articles** — {irrelevant:,} too large for Storeganizer ({100 - relevant_pct}%)")
 
-            stat_cols[3].metric("Completeness", f"{quality.get('completeness_score', 0)}%")
+        if ready == relevant and relevant > 0:
+            st.success(f"**{relevant:,} relevant articles** — All have complete data")
+        elif ready > 0:
+            st.warning(f"**{relevant:,} relevant articles** — {ready:,} ready, {needs_data:,} need data")
+        elif needs_data > 0:
+            st.error(f"**{relevant:,} relevant articles** — All missing data")
+        else:
+            st.error("No relevant articles found")
 
-            st.dataframe(raw_df.head(10), height=200)
+        # === COLUMN DETECTION ===
+        col_status = []
+        for col, found in columns_found.items():
+            if col == "demand":
+                if found:
+                    col_status.append(f"✓ {found}")
+                else:
+                    col_status.append("○ demand")
+            elif found:
+                col_status.append(f"✓ {col}")
+            else:
+                col_status.append(f"✗ {col}")
+        st.caption(f"Columns: {' · '.join(col_status)}")
 
-        if missing_required:
-            st.warning("Missing required columns will block auto-processing.")
+        # === DATA RANGES (sanity check) ===
+        if data_ranges:
+            range_parts = []
+            if "width_mm" in data_ranges:
+                r = data_ranges["width_mm"]
+                range_parts.append(f"W: {r['min']}-{r['max']}mm")
+            if "depth_mm" in data_ranges:
+                r = data_ranges["depth_mm"]
+                range_parts.append(f"D: {r['min']}-{r['max']}mm")
+            if "height_mm" in data_ranges:
+                r = data_ranges["height_mm"]
+                range_parts.append(f"H: {r['min']}-{r['max']}mm")
+            if "weight_kg" in data_ranges:
+                r = data_ranges["weight_kg"]
+                range_parts.append(f"Weight: {r['min']}-{r['max']}kg")
+            if range_parts:
+                st.caption(f"Ranges: {' · '.join(range_parts)}")
+
+        # === THREE-TAB PREVIEW: Ready / Needs Data / Irrelevant ===
+        tab_ready, tab_needs, tab_irrelevant = st.tabs([
+            f"Ready ({ready:,})",
+            f"Needs Data ({needs_data:,})",
+            f"Irrelevant ({irrelevant:,})"
+        ])
+
+        with tab_ready:
+            if isinstance(top_ready, pd.DataFrame) and len(top_ready) > 0:
+                st.dataframe(top_ready, height=250, width="stretch")
+                if ready > 15:
+                    st.caption(f"Showing 15 of {ready:,} ready articles")
+            else:
+                st.info("No articles ready yet")
+
+        with tab_needs:
+            if isinstance(top_needs_data, pd.DataFrame) and len(top_needs_data) > 0:
+                # Show missing breakdown
+                if missing_breakdown:
+                    missing_lines = [f"{count:,} missing {field}" for field, count in missing_breakdown.items() if "forecast" not in field.lower()]
+                    if missing_lines:
+                        st.caption(" · ".join(missing_lines))
+                st.dataframe(top_needs_data, height=250, width="stretch")
+                if needs_data > 15:
+                    st.caption(f"Showing 15 of {needs_data:,} articles needing data")
+            else:
+                st.success("All relevant articles have complete data")
+
+        with tab_irrelevant:
+            if isinstance(top_irrelevant, pd.DataFrame) and len(top_irrelevant) > 0:
+                # Show irrelevant breakdown
+                if irrelevant_breakdown:
+                    irr_lines = [f"{count:,} {reason}" for reason, count in irrelevant_breakdown.items()]
+                    if irr_lines:
+                        st.caption(" · ".join(irr_lines))
+                st.dataframe(top_irrelevant, height=250, width="stretch")
+                if irrelevant > 15:
+                    st.caption(f"Showing 15 of {irrelevant:,} oversized/overweight articles")
+            else:
+                st.info("All articles could potentially fit in Storeganizer pockets")
+
+        # === DOWNLOAD BUTTON (only for RELEVANT articles needing data) ===
+        if needs_data > 0:
+            incomplete_excel = exports.create_incomplete_articles_export(raw_df, health)
+            if incomplete_excel:
+                st.download_button(
+                    label=f"Download {needs_data:,} articles needing data",
+                    data=incomplete_excel,
+                    file_name="articles_needing_data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Only relevant articles that could fit - fill in dimensions/weight",
+                    key="download_incomplete",
+                )
+
+        # === FULL DATA PREVIEW (collapsed) ===
+        with st.expander("Full data preview", expanded=False):
+            # Filter out excluded columns
+            preview_cols = [c for c in raw_df.columns if not any(
+                excl.lower() in c.lower() for excl in config.EXCLUDED_PREVIEW_COLUMNS
+            ) and c not in config.EXCLUDED_SINGLE_COLUMNS]
+            st.dataframe(raw_df[preview_cols].head(20), height=300, width="stretch")
 
     # Navigation buttons
     nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
@@ -941,7 +1035,7 @@ def render_step_upload():
         if st.button("Reset", key="reset_upload_btn"):
             reset_inventory_state()
     with nav_col3:
-        if st.button("Next →", type="primary", disabled=st.session_state.get("inventory_raw") is None):
+        if st.button("Next →", type="primary", key="step1_next", disabled=st.session_state.get("inventory_raw") is None):
             go_to_step(2)
 
 
@@ -950,101 +1044,31 @@ def render_step_upload():
 # ===========================
 
 def render_step_auto_processing():
-    st.subheader("Step 3 — Configure & Process")
+    st.subheader("Step 3 — Process")
     raw_df = st.session_state.get("inventory_raw")
     if raw_df is None:
         st.warning("Upload an .xlsx file first.")
         return
 
-    # If already processed, show results
+    # If already processed, show quick summary and nav
     if st.session_state.get("processing_done"):
         inv_filtered = st.session_state.get("inventory_filtered")
         eligible = 0 if inv_filtered is None else len(inv_filtered)
         rejected = st.session_state.get("rejected_count", 0)
-        st.success(f"Processing complete. Eligible: {eligible:,} | Rejected: {rejected:,}.")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Re-configure & Re-run", type="secondary", use_container_width=True):
-                st.session_state["processing_done"] = False
-                st.session_state["processing_started"] = False
-                st.rerun()
-        with col2:
-            st.button("View results dashboard →", type="primary", on_click=lambda: go_to_step(4), use_container_width=True)
+        st.success(f"Processed: {eligible:,} eligible | {rejected:,} rejected")
+        st.button("View Results →", type="primary", on_click=lambda: go_to_step(4), use_container_width=True)
         return
 
-    # === CONFIGURATION SECTION ===
-    with st.expander("Stockweeks Filter (Optional)", expanded=False):
-        st.caption("Filter articles by velocity - OFF by default (all articles eligible if they fit)")
-        use_stockweeks = st.checkbox(
-            "Enable stockweeks filter",
-            value=st.session_state.get("use_stockweeks_filter", False),
-            key="use_stockweeks_filter_input",
-            help="Filter articles based on weeks of stock coverage (ASSQ/EWS)"
-        )
-        st.session_state["use_stockweeks_filter"] = use_stockweeks
-
-        if use_stockweeks:
-            col1, col2 = st.columns(2)
-            with col1:
-                min_sw = st.slider(
-                    "Min stockweeks",
-                    min_value=0.0, max_value=10.0, step=0.5,
-                    value=st.session_state.get("min_stockweeks", 1.0),
-                    key="min_stockweeks_input",
-                    help="Minimum weeks of stock (items below this sell too fast)"
-                )
-                st.session_state["min_stockweeks"] = min_sw
-            with col2:
-                max_sw = st.slider(
-                    "Max stockweeks",
-                    min_value=4.0, max_value=52.0, step=1.0,
-                    value=st.session_state.get("max_stockweeks", 26.0),
-                    key="max_stockweeks_input",
-                    help="Maximum weeks of stock (items above this are too slow)"
-                )
-                st.session_state["max_stockweeks"] = max_sw
-
-    with st.expander("Other Filters", expanded=False):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            remove_fragile = st.checkbox(
-                "Exclude fragile items",
-                value=st.session_state.get("remove_fragile", False),
-                key="remove_fragile_input",
-                help="Remove items with 'glass', 'fragile', 'ceramic' in description"
-            )
-            st.session_state["remove_fragile"] = remove_fragile
-
-            allow_squeeze = st.checkbox(
-                "Allow soft packaging squeeze (10%)",
-                value=st.session_state.get("allow_extra_width", False),
-                key="allow_squeeze_input",
-                help="Allow 10% extra width for compressible packaging"
-            )
-            st.session_state["allow_extra_width"] = allow_squeeze
-
-        with col2:
-            velocity = st.selectbox(
-                "Velocity band filter",
-                options=["All", "A", "B", "C"],
-                index=["All", "A", "B", "C"].index(st.session_state.get("velocity_band_filter", "All")),
-                key="velocity_band_input",
-                help="A=fast movers, B=medium, C=slow movers"
-            )
-            st.session_state["velocity_band_filter"] = velocity
-
-    # Pocket size selection removed - now using cascading allocation
-    # Articles will be assigned to the smallest pocket that fits (XS → S → M → L)
+    # Simple processing - no config expanders, all refinement happens in Step 4
+    st.caption("Cascading allocation: articles assigned to smallest fitting pocket (XS → S → M → L)")
 
     if st.session_state.get("processing_error"):
         st.error(st.session_state["processing_error"])
 
-    # Constrain button width
-    process_col1, process_col2, process_col3 = st.columns([1, 2, 1])
-    with process_col2:
-        run_processing = st.button("Run Processing", type="primary", use_container_width=True)
+    # Centered run button
+    _, btn_col, _ = st.columns([1, 2, 1])
+    with btn_col:
+        run_processing = st.button("Run Processing", type="primary", key="run_processing_btn", use_container_width=True)
 
     if run_processing:
         st.session_state["processing_error"] = None
@@ -1055,7 +1079,7 @@ def render_step_auto_processing():
             go_to_step(4)
             st.rerun()
         else:
-            st.error(st.session_state.get("processing_error", "Processing failed. Check data and settings."))
+            st.error(st.session_state.get("processing_error", "Processing failed."))
 
 
 # ===========================
@@ -1151,14 +1175,207 @@ def filter_display_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def rerun_with_refinements():
+    """Re-run processing with refinement settings from Step 4."""
+    # Store previous counts for delta display
+    prev_filtered = st.session_state.get("inventory_filtered")
+    st.session_state["prev_eligible_count"] = len(prev_filtered) if prev_filtered is not None else 0
+    st.session_state["prev_rejected_count"] = st.session_state.get("rejected_count", 0)
+
+    raw_df = st.session_state.get("inventory_raw")
+    if raw_df is None:
+        return False
+
+    try:
+        enriched_df = add_assq_columns(raw_df)
+        if "sku_code" in enriched_df.columns:
+            library = get_article_library()
+            enriched_df, _ = library.enrich_dataframe(enriched_df, "sku_code")
+
+        # Apply SM 0 filter if enabled
+        if st.session_state.get("refine_sm0_only", False):
+            sm_cols = [c for c in enriched_df.columns if "wished sm" in c.lower() or c.upper() in ["SM", "SALES METHOD", "STOCK MODEL"]]
+            if sm_cols:
+                sm_col = sm_cols[0]
+                sm_vals = pd.to_numeric(enriched_df[sm_col], errors="coerce")
+                enriched_df = enriched_df[sm_vals == 0].copy()
+
+        # Apply whitelist/requested filter if enabled
+        if st.session_state.get("refine_requested_only", False):
+            whitelist_info = st.session_state.get("whitelist_info", {})
+            if whitelist_info.get("detected") and whitelist_info.get("article_numbers"):
+                whitelist_articles = set(str(a).strip() for a in whitelist_info["article_numbers"])
+                # Find article column in enriched_df
+                article_col = None
+                for col in enriched_df.columns:
+                    if col.lower() in ["sku_code", "article number", "article_number", "pa"]:
+                        article_col = col
+                        break
+                if article_col:
+                    enriched_df = enriched_df[enriched_df[article_col].astype(str).str.strip().isin(whitelist_articles)].copy()
+
+        planning_ready_df = allocation.compute_planning_metrics(
+            enriched_df,
+            units_per_column=config.DEFAULT_UNITS_PER_COLUMN,
+            max_weight_per_column_kg=config.DEFAULT_COLUMN_WEIGHT_LIMIT,
+            per_sku_units_col="assq_units",
+        )
+
+        # Get refinement settings
+        force_pocket = st.session_state.get("refine_pocket_size", "Auto")
+        force_pocket_size = None if force_pocket == "Auto" else force_pocket
+
+        eligible_df, rejected_df, rejected_count, rejection_reasons = eligibility.apply_cascading_pocket_allocation(
+            planning_ready_df,
+            max_weight_kg=st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT),
+            velocity_band=st.session_state.get("velocity_band_filter", "All"),
+            min_stockweeks=st.session_state.get("refine_min_stockweeks", 1.0),
+            max_stockweeks=st.session_state.get("refine_max_stockweeks", 26.0),
+            use_stockweeks_filter=st.session_state.get("refine_use_stockweeks", False),
+            allow_squeeze=st.session_state.get("allow_extra_width", config.ALLOW_SQUEEZE_PACKAGING),
+            remove_fragile=st.session_state.get("refine_no_fragile", False),
+            force_pocket_size=force_pocket_size,
+        )
+
+        columns_required = int(eligible_df["columns_required"].sum()) if "columns_required" in eligible_df else len(eligible_df)
+        bay_count = allocation.calculate_bay_requirements(
+            sku_count=len(eligible_df),
+            columns_per_bay=config.DEFAULT_COLUMNS_PER_BAY,
+            rows_per_column=config.DEFAULT_ROWS_PER_COLUMN,
+            columns_required_total=columns_required,
+        ) if len(eligible_df) > 0 else 0
+
+        planning_df, blocks, columns_summary = pd.DataFrame(), [], pd.DataFrame()
+        if len(eligible_df) > 0:
+            planning_df, blocks, columns_summary = allocation.build_layout(
+                eligible_df,
+                bays=bay_count or 1,
+                columns_per_bay=config.DEFAULT_COLUMNS_PER_BAY,
+                rows_per_column=config.DEFAULT_ROWS_PER_COLUMN,
+                units_per_column=config.DEFAULT_UNITS_PER_COLUMN,
+                max_weight_per_column_kg=config.DEFAULT_COLUMN_WEIGHT_LIMIT,
+                per_sku_units_col="assq_units",
+            )
+
+        st.session_state["inventory_filtered"] = eligible_df
+        st.session_state["rejected_items"] = rejected_df
+        st.session_state["rejected_count"] = rejected_count
+        st.session_state["rejection_reasons"] = rejection_reasons
+        st.session_state["planning_df"] = planning_df
+        st.session_state["blocks"] = blocks
+        st.session_state["columns_summary"] = columns_summary
+        st.session_state["bay_count"] = bay_count
+        st.session_state["num_bays"] = bay_count
+
+        st.session_state["data_quality"] = analyze_data_quality(enriched_df)
+        recommended_cfg = choose_recommended_config(eligible_df)
+        st.session_state["recommended_config"] = recommended_cfg
+        st.session_state["smart_rejections"] = get_smart_rejection_analysis(rejected_df, rejection_reasons, recommended_cfg.get("config"))
+        st.session_state["show_delta"] = True
+        return True
+    except Exception as exc:
+        st.session_state["processing_error"] = str(exc)
+        return False
+
+
 def render_step_results_dashboard():
     st.subheader("Step 4 — Results")
+
+    # === REFINEMENT BAR (always visible at top) ===
+    st.markdown("##### Refine Selection")
+
+    # Check for whitelist detection
+    whitelist_info = st.session_state.get("whitelist_info", {})
+    whitelist_detected = whitelist_info.get("detected", False)
+
+    refine_cols = st.columns([2, 1, 1, 1, 1, 1])
+
+    with refine_cols[0]:
+        pocket_options = ["Auto", "XS", "Small", "Medium", "Large"]
+        current_pocket = st.session_state.get("refine_pocket_size", "Auto")
+        pocket_idx = pocket_options.index(current_pocket) if current_pocket in pocket_options else 0
+        pocket_choice = st.radio(
+            "Pocket",
+            pocket_options,
+            index=pocket_idx,
+            horizontal=True,
+            key="refine_pocket_radio",
+            help="Auto = cascading (XS→S→M→L), or force single size"
+        )
+        st.session_state["refine_pocket_size"] = pocket_choice
+
+    with refine_cols[1]:
+        no_fragile = st.checkbox(
+            "No fragile",
+            value=st.session_state.get("refine_no_fragile", False),
+            key="refine_fragile_cb",
+            help="Exclude glass/ceramic/fragile items"
+        )
+        st.session_state["refine_no_fragile"] = no_fragile
+
+    with refine_cols[2]:
+        sm0_only = st.checkbox(
+            "SM 0 only",
+            value=st.session_state.get("refine_sm0_only", False),
+            key="refine_sm0_cb",
+            help="Only articles with SM = 0"
+        )
+        st.session_state["refine_sm0_only"] = sm0_only
+
+    with refine_cols[3]:
+        # Requested/whitelist filter - only enabled if detected
+        requested_only = st.checkbox(
+            "Requested only",
+            value=st.session_state.get("refine_requested_only", False),
+            key="refine_requested_cb",
+            disabled=not whitelist_detected,
+            help=whitelist_info.get("description", "No priority list detected") if whitelist_detected else "No priority list detected in file"
+        )
+        st.session_state["refine_requested_only"] = requested_only if whitelist_detected else False
+
+    with refine_cols[4]:
+        use_sw = st.checkbox(
+            "Stockweeks 1-26",
+            value=st.session_state.get("refine_use_stockweeks", False),
+            key="refine_stockweeks_cb",
+            help="Filter by weeks of stock (1-26)"
+        )
+        st.session_state["refine_use_stockweeks"] = use_sw
+        if use_sw:
+            # Set sensible defaults
+            if "refine_min_stockweeks" not in st.session_state:
+                st.session_state["refine_min_stockweeks"] = 1.0
+            if "refine_max_stockweeks" not in st.session_state:
+                st.session_state["refine_max_stockweeks"] = 26.0
+
+    with refine_cols[5]:
+        if st.button("Regenerate", type="primary", key="regenerate_btn", use_container_width=True):
+            with st.spinner("Re-processing..."):
+                success = rerun_with_refinements()
+            if success:
+                st.rerun()
+            else:
+                st.error(st.session_state.get("processing_error", "Processing failed."))
+
+    # Get data first (needed for delta and display)
     filtered = st.session_state.get("inventory_filtered")
     rejected_df = st.session_state.get("rejected_items")
     quality = st.session_state.get("data_quality") or {}
 
     eligible_count = len(filtered) if isinstance(filtered, pd.DataFrame) else 0
     rejected_count = len(rejected_df) if isinstance(rejected_df, pd.DataFrame) else st.session_state.get("rejected_count", 0)
+
+    # Show delta after regenerate
+    if st.session_state.get("show_delta"):
+        prev_elig = st.session_state.get("prev_eligible_count", 0)
+        delta = eligible_count - prev_elig
+        if delta != 0:
+            delta_str = f"+{delta}" if delta > 0 else str(delta)
+            delta_color = "green" if delta > 0 else "red"
+            st.markdown(f"<span style='color:{delta_color}'>Eligible: {delta_str} articles</span>", unsafe_allow_html=True)
+        st.session_state["show_delta"] = False
+
+    st.markdown("---")
 
     # Calculate bay requirements per pocket size (CORRECT calculation)
     bay_calc = calculate_bay_requirements_by_size(filtered)
@@ -1196,6 +1413,32 @@ def render_step_results_dashboard():
             avg_assq = filtered["assq_units"].mean()
             total_pockets = filtered["assq_units"].count()  # 1 pocket per article (rough)
             st.caption(f"Avg ASSQ: {avg_assq:.1f} units/pocket | {total_pockets:,} pockets needed (1 per article)")
+
+        # === ROI QUICK ESTIMATE ===
+        if breakdown:
+            total_price = 0
+            total_locations_after = 0
+            for size, info in breakdown.items():
+                bays = info["bays_needed"]
+                total_price += bays * config.BAY_PRICES.get(size, 0)
+                total_locations_after += bays * config.CELLS_PER_BAY.get(size, 0)
+
+            # Before: standard racking at 12 locations/rack
+            # Need same number of articles = need num_articles / 12 racks
+            num_articles = eligible_count
+            racks_before = max(1, (num_articles + config.IKEA_LOCATIONS_PER_RACK_BEFORE - 1) // config.IKEA_LOCATIONS_PER_RACK_BEFORE)
+            locations_before = racks_before * config.IKEA_LOCATIONS_PER_RACK_BEFORE
+
+            locations_saved = total_locations_after - locations_before
+            location_multiplier = total_locations_after / locations_before if locations_before > 0 else 0
+
+            st.markdown("### Investment Estimate")
+            roi_cols = st.columns(5)
+            roi_cols[0].metric("Investment", f"€{total_price:,.0f}")
+            roi_cols[1].metric("Bays Before", f"{racks_before}", help=f"Standard racking @ {config.IKEA_LOCATIONS_PER_RACK_BEFORE} loc/rack")
+            roi_cols[2].metric("Bays After", f"{total_bays}", help="Storeganizer bays")
+            roi_cols[3].metric("Locations", f"{locations_before} → {total_locations_after:,}")
+            roi_cols[4].metric("Density Gain", f"{location_multiplier:.1f}x", delta=f"+{locations_saved:,}" if locations_saved > 0 else f"{locations_saved:,}")
 
     # Data quality alerts (collapsed)
     if quality.get("alerts"):

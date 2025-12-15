@@ -500,6 +500,7 @@ def apply_cascading_pocket_allocation(
     use_stockweeks_filter: bool = None,
     allow_squeeze: bool = False,
     remove_fragile: bool = False,
+    force_pocket_size: str = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, int, dict]:
     """
     Apply cascading pocket allocation: try XS → S → M → L for each article.
@@ -520,6 +521,7 @@ def apply_cascading_pocket_allocation(
         use_stockweeks_filter: Use stockweeks filter
         allow_squeeze: Allow 10% width overage for soft packaging
         remove_fragile: Remove fragile items
+        force_pocket_size: Force single pocket size (None=cascade, "XS"/"Small"/"Medium"/"Large")
 
     Returns:
         Tuple of (eligible_df, rejected_df, rejected_count, rejection_reasons_dict)
@@ -546,7 +548,7 @@ def apply_cascading_pocket_allocation(
 
     # Pocket sizes in order (smallest to largest)
     # NOTE: Using official Storeganizer specs from config.STANDARD_CONFIGS
-    pocket_sizes = [
+    all_pocket_sizes = [
         ("XS", config.STANDARD_CONFIGS["xs"]["pocket_width"],
          config.STANDARD_CONFIGS["xs"]["pocket_depth"],
          config.STANDARD_CONFIGS["xs"]["pocket_height"]),
@@ -561,6 +563,15 @@ def apply_cascading_pocket_allocation(
          config.STANDARD_CONFIGS["large"]["pocket_height"]),
     ]
 
+    # If force_pocket_size is set, only use that single pocket size
+    if force_pocket_size:
+        pocket_sizes = [p for p in all_pocket_sizes if p[0] == force_pocket_size]
+        if not pocket_sizes:
+            # Invalid force_pocket_size, fall back to all
+            pocket_sizes = all_pocket_sizes
+    else:
+        pocket_sizes = all_pocket_sizes
+
     # Assign pocket size to each article
     pocket_assignments = []
     for idx in df_work.index:
@@ -573,7 +584,7 @@ def apply_cascading_pocket_allocation(
             pocket_assignments.append(None)
             continue
 
-        # Try each pocket size in order (smallest to largest)
+        # Try each pocket size in order (smallest to largest, or single if forced)
         assigned = None
         for size_name, max_w, max_d, max_h in pocket_sizes:
             effective_max_w = max_w * width_multiplier

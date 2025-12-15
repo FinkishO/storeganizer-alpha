@@ -287,3 +287,104 @@ CUSTOMIZATION_API_ENDPOINT = None
 
 # Internal UI modernization (discussed with Dimitri)
 LEGACY_UI_INTEGRATION = False
+
+# ===========================
+# PREVIEW COLUMN PRESETS
+# ===========================
+
+# IKEA format - columns to show in Step 1 previews
+# Edit this list to change which columns appear in Ready/Needs Data/Irrelevant tabs
+# Order matters - columns appear in this order
+PREVIEW_COLUMNS_IKEA = [
+    "sku_code",
+    "description",
+    "weekly_demand",
+    "stock_weeks",
+    # Dimensions shown only if relevant (Needs Data / Irrelevant tabs)
+    # "width_mm",
+    # "depth_mm",
+    # "height_mm",
+    # "weight_kg",
+]
+
+# For Ready tab - we know they fit, show business-relevant columns
+READY_PREVIEW_COLUMNS = [
+    "sku_code",
+    "description",
+    "weekly_demand",
+    "stock_weeks",
+]
+
+# For Needs Data tab - show what's missing
+NEEDS_DATA_PREVIEW_COLUMNS = [
+    "sku_code",
+    "description",
+    "width_mm",
+    "depth_mm",
+    "height_mm",
+    "weight_kg",
+    "Missing",  # Added by analyze_file_health()
+]
+
+# For Irrelevant tab - show why they're too big
+IRRELEVANT_PREVIEW_COLUMNS = [
+    "sku_code",
+    "description",
+    "width_mm",
+    "depth_mm",
+    "height_mm",
+    "weight_kg",
+    "Why Irrelevant",  # Added by analyze_file_health()
+]
+
+# Columns to EXCLUDE from Full Data preview (case-insensitive partial match)
+EXCLUDED_PREVIEW_COLUMNS = [
+    "pia facts",
+    "pt ov",
+    "unnamed",
+    "pt original",
+    "aisle main",
+    "max depth of aisle",
+    "article finalized",
+    "pt hybrid ov",
+    "hybrid handling method",
+    "00loc hybrid",
+    "00 hy ov",
+    "10 loc hybrid",
+    "10 hy ov",
+    "hybrid hm comment",
+    "hybrid connected articles split",
+    "aisles hy",
+    "max depth of aisle hybrid",
+    "hybrid article finalized",
+]
+
+# Single-letter columns to exclude (exact match)
+EXCLUDED_SINGLE_COLUMNS = ["U", "U.1", "U.2"]
+
+# ===========================
+# ROI / PRICING CONFIG
+# ===========================
+
+# Bay pricing (EUR, 2700mm height, end-user prices from Dimitri Dec 2025)
+BAY_PRICES = {
+    "XS": 4413.13,
+    "Small": 1398.98,
+    "Medium": 1971.87,
+    "Large": 1479.65,
+}
+
+# Cells per bay (from storeganizer buying guide)
+CELLS_PER_BAY = {
+    "XS": 390,
+    "Small": 138,
+    "Medium": 90,
+    "Large": 40,
+}
+
+# IKEA default: locations per rack BEFORE Storeganizer (standard racking)
+IKEA_LOCATIONS_PER_RACK_BEFORE = 12
+
+# Default rack dimensions (meters)
+DEFAULT_RACK_WIDTH_M = 2.7
+DEFAULT_RACK_DEPTH_M = 1.0
