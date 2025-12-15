@@ -1454,6 +1454,13 @@ def render_step_results_dashboard():
             roi_cols[3].metric("Locations", f"{locations_before} → {total_locations_after:,}")
             roi_cols[4].metric("Density Gain", f"{location_multiplier:.1f}x", delta=f"+{locations_saved:,}" if locations_saved > 0 else f"{locations_saved:,}")
 
+            # Store values for ROI step (Step 5)
+            st.session_state["roi_investment"] = total_price
+            st.session_state["roi_num_racks_before"] = racks_before
+            st.session_state["roi_num_racks_after"] = total_bays
+            st.session_state["roi_locations_before"] = locations_before
+            st.session_state["roi_locations_after"] = total_locations_after
+
     # Data quality alerts (collapsed)
     if quality.get("alerts"):
         with st.expander("Data quality", expanded=False):
@@ -1531,15 +1538,13 @@ def render_step_roi_analysis():
     st.subheader("Step 5 — ROI Analysis")
     st.caption("Calculate projected savings, payback period, and return on investment.")
 
-    # Try to pre-fill intelligent defaults from planning data
-    bay_count = st.session_state.get("bay_count", 0)
-    if bay_count > 0:
-        # Smart defaults: use actual bay count from planning
-        default_racks_after = bay_count
-        default_racks_before = bay_count * 2  # Assume 2:1 consolidation
-    else:
-        default_racks_after = st.session_state.get("roi_num_racks_after", 15)
-        default_racks_before = st.session_state.get("roi_num_racks_before", 30)
+    # Show what was configured in Step 4
+    step4_investment = st.session_state.get("roi_investment", 0)
+    step4_bays_before = st.session_state.get("roi_num_racks_before", 0)
+    step4_bays_after = st.session_state.get("roi_num_racks_after", 0)
+
+    if step4_investment > 0:
+        st.success(f"**From Step 4:** €{step4_investment:,.0f} investment | {step4_bays_before} bays before → {step4_bays_after} Storeganizer bays")
 
     st.markdown("### Investment Parameters")
     st.caption("Adjust these values to match your warehouse and cost structure.")
@@ -1631,7 +1636,7 @@ def render_step_roi_analysis():
             "Number of racks - before",
             min_value=1,
             max_value=10000,
-            value=int(default_racks_before),
+            value=int(st.session_state.get("roi_num_racks_before", 30)),
             step=1,
             help="Total racks needed in current setup"
         )
@@ -1639,7 +1644,7 @@ def render_step_roi_analysis():
             "Number of racks - after (Storeganizer)",
             min_value=1,
             max_value=10000,
-            value=int(default_racks_after),
+            value=int(st.session_state.get("roi_num_racks_after", 15)),
             step=1,
             help="Total racks needed with Storeganizer"
         )
