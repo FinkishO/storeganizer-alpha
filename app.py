@@ -59,11 +59,11 @@ LENA_AVATAR_PATH = Path(__file__).parent / "source" / "lena2_img.png"
 
 # Wizard step labels (Storeganizer-only flow)
 WIZARD_STEPS = {
-    1: "Service Selection",
-    2: "Upload",
-    3: "Auto-Process",
-    4: "Results Dashboard",
-    5: "ROI Analysis",
+    1: "Upload",
+    2: "Select Analysis",
+    3: "Configure",
+    4: "Results",
+    5: "ROI",
 }
 
 
@@ -131,6 +131,15 @@ def init_session_state():
         "roi_efficiency_increase": 15.0,  # Store as percentage (15% = 15.0)
         "roi_investment": 35000.0,
         "roi_results": None,
+        # Output template settings (column selection for eligibility preview)
+        "output_template_name": "Default",
+        "output_visible_columns": None,  # None = show all columns
+        "output_templates": {
+            "Default": None,  # Show all
+            "Compact": ["sku_code", "description", "pocket_size", "stockweeks"],
+            "Dimensions": ["sku_code", "description", "width_mm", "depth_mm", "height_mm", "weight_kg", "pocket_size"],
+            "Planning": ["sku_code", "description", "pocket_size", "assq_units", "stockweeks", "weekly_demand", "velocity_band"],
+        },
     }
 
     for key, value in defaults.items():
@@ -268,7 +277,8 @@ def render_top_nav():
     """Quick-access navigation so Next isn't buried after long content."""
     step = st.session_state.get("wizard_step", 1)
     total = len(WIZARD_STEPS)
-    if step >= total:
+    # Don't show top nav on Step 1 (has its own navigation)
+    if step == 1 or step >= total:
         return
     can_go_next = can_advance(step)
     cols = st.columns([5, 1])
@@ -291,9 +301,9 @@ def go_to_step(step: int):
 def can_advance(step: int) -> bool:
     """Gate Next navigation so steps aren't skipped."""
     if step == 1:
-        return bool(st.session_state.get("selected_service"))
-    if step == 2:
         return st.session_state.get("inventory_raw") is not None
+    if step == 2:
+        return bool(st.session_state.get("selected_service"))
     if step == 3:
         return bool(st.session_state.get("processing_done"))
     return True
@@ -587,11 +597,45 @@ def get_smart_rejection_analysis(rejected_df: pd.DataFrame, reasons: dict, confi
 
 
 def choose_recommended_config(eligible_df: pd.DataFrame) -> dict:
-    """Select the best-fitting Storeganizer preset for the eligible pool."""
+    """
+    Select the recommended Storeganizer configuration based on cascading allocation results.
+
+    With cascading allocation, articles are assigned to smallest fitting pocket (XS/S/M/L).
+    Recommendation prioritizes the most common pocket size in the mix.
+    """
     if eligible_df is None or len(eligible_df) == 0:
         cfg = config.STANDARD_CONFIGS.get(config.DEFAULT_CONFIG_SIZE, {})
         return {"key": config.DEFAULT_CONFIG_SIZE, "config": cfg, "reason": "Defaulting to Medium until eligible SKUs are available."}
 
+    # If pocket_size column exists (cascading allocation), use it to recommend
+    if "pocket_size" in eligible_df.columns:
+        pocket_counts = eligible_df["pocket_size"].value_counts()
+        if not pocket_counts.empty:
+            # Most common pocket size
+            most_common = pocket_counts.idxmax()
+            count = pocket_counts.max()
+            pct = int((count / len(eligible_df)) * 100)
+
+            # Map display name to config key
+            size_key_map = {
+                "XS": "xs",
+                "Small": "small",
+                "Medium": "medium",
+                "Large": "large",
+            }
+            config_key = size_key_map.get(most_common, "medium")
+            cfg = config.STANDARD_CONFIGS.get(config_key, config.STANDARD_CONFIGS["medium"])
+
+            # Build distribution summary
+            dist_str = ", ".join([f"{size}: {ct}" for size, ct in pocket_counts.items()])
+
+            return {
+                "key": config_key,
+                "config": cfg,
+                "reason": f"Cascading allocation: {pct}% use {most_common} pockets. Distribution: {dist_str}.",
+            }
+
+    # Fallback: original logic (if pocket_size not present)
     scores = []
     for key, cfg in config.STANDARD_CONFIGS.items():
         width_ok = pd.to_numeric(eligible_df.get("width_mm"), errors="coerce") <= cfg.get("pocket_width", 0)
@@ -632,12 +676,10 @@ def run_auto_processing_pipeline() -> bool:
             per_sku_units_col="assq_units",
         )
 
-        # Get filter settings from session state (user-configurable in Step 3)
-        eligible_df, rejected_df, rejected_count, rejection_reasons = eligibility.apply_all_filters_detailed(
+        # Apply cascading pocket allocation (XS → S → M → L)
+        # Each article is assigned to the smallest pocket that fits
+        eligible_df, rejected_df, rejected_count, rejection_reasons = eligibility.apply_cascading_pocket_allocation(
             planning_ready_df,
-            max_width=st.session_state.get("elig_max_w", config.DEFAULT_POCKET_WIDTH),
-            max_depth=st.session_state.get("elig_max_d", config.DEFAULT_POCKET_DEPTH),
-            max_height=st.session_state.get("elig_max_h", config.DEFAULT_POCKET_HEIGHT),
             max_weight_kg=st.session_state.get("pocket_weight_limit", config.DEFAULT_POCKET_WEIGHT_LIMIT),
             velocity_band=st.session_state.get("velocity_band_filter", "All"),
             min_stockweeks=st.session_state.get("min_stockweeks", config.MIN_STOCKWEEKS),
@@ -706,7 +748,7 @@ def render_lena_chat():
         with st.expander("Lena — Storeganizer Analyst", expanded=False):
             st.caption(config.LENA_PERSONA[:140] + "…")
 
-        if st.button("Reset chat", key="reset_chat"):
+        if st.button("Reset chat", key="reset_chat", use_container_width=True):
             st.session_state["chat_history"] = []
 
         # Step-aware suggested prompts
@@ -723,12 +765,12 @@ def render_lena_chat():
                 if st.button(
                     prompt,
                     key=f"suggest_{step}_{idx}",
-                    width="stretch",
+                    use_container_width=True,
                 ):
                     st.session_state["lena_input"] = prompt
 
         user_message = st.text_input("Ask Lena", key="lena_input", placeholder="e.g., What are the pocket limits?")
-        if st.button("Send to Lena", key="send_lena"):
+        if st.button("Send to Lena", key="send_lena", use_container_width=True):
             if user_message:
                 answer, docs = rag_service.answer(user_message, context)
                 st.session_state["chat_history"].append(("you", user_message))
@@ -747,93 +789,68 @@ def render_lena_chat():
 
 
 # ===========================
-# Step 1: Service Selection
+# Step 2: Select Analysis
 # ===========================
 
 def render_step_service_selection():
-    st.subheader("Step 1 — Service Selection")
-    st.caption("Pick the Storeganizer workflow. Identify Scope is live; the rest are coming soon.")
-    st.markdown("Upload an .xlsx inventory, let the service auto-assess eligibility, and jump straight to the results dashboard.")
+    st.subheader("Step 2 — What do you want to do?")
+
+    # Check if data is uploaded
+    if st.session_state.get("inventory_raw") is None:
+        st.warning("Upload data first.")
+        return
 
     services = [
         {
             "key": "identify_scope",
             "name": "Identify Scope",
-            "tagline": "Quick ROI + config recommendation",
-            "description": "Upload SKU list → Get rough ROI overview, recommended articles, and suggested bay configuration.",
+            "tagline": "Eligibility + ROI estimate",
             "available": True,
         },
         {
-            "key": "slotting_optimizer",
-            "name": "Slotting Optimizer",
-            "tagline": "Rate your current setup",
-            "description": "Upload SKUs with current placement → Get utilization rating (0-100) and low-hanging fruit improvements.",
+            "key": "top_50",
+            "name": "Top 50 Analysis",
+            "tagline": "Low-hanging fruit",
             "available": False,
         },
         {
             "key": "full_planning",
-            "name": "Full Planning",
-            "tagline": "Scope + planogram export",
-            "description": "Complete analysis with planogram export for implementation + WMS import list.",
-            "available": False,
-        },
-        {
-            "key": "vass_scope",
-            "name": "VASS: Identify Scope",
-            "tagline": "Vertical storage analysis",
-            "description": "Same scope analysis for Vertical Automated Storage Solutions (10m towers, tray-based).",
-            "available": False,
-        },
-        {
-            "key": "vass_planning",
-            "name": "VASS: Full Planning",
-            "tagline": "VASS implementation ready",
-            "description": "Complete VASS planning with tray allocation and pick optimization.",
+            "name": "Full Planogram",
+            "tagline": "Complete bay layout",
             "available": False,
         },
     ]
 
-    cols = st.columns(5)
+    cols = st.columns(3)
     for idx, svc in enumerate(services):
-        col = cols[idx % len(cols)]
-        with col:
+        with cols[idx]:
             selected = st.session_state.get("selected_service") == svc["key"]
-            badge = "🟢 Live" if svc["available"] else "🟡 Coming soon"
-            st.markdown(f"**{svc['name']}**  \n{svc['tagline']}")
-            st.caption(badge)
-            st.caption(svc.get("description", ""))
+            st.markdown(f"**{svc['name']}**")
+            st.caption(svc['tagline'])
 
             if svc["available"]:
                 st.button(
-                    "Select",
+                    "Select" if not selected else "✓ Selected",
                     key=f"svc_{svc['key']}",
-                    width="stretch",
                     type="primary" if selected else "secondary",
+                    use_container_width=True,
                     on_click=lambda key=svc["key"]: (
                         st.session_state.update({"selected_service": key}),
-                        go_to_step(2),
+                        go_to_step(3),
                     ),
                 )
-                if selected:
-                    st.success("Selected")
             else:
-                st.button("Coming soon", key=f"svc_{svc['key']}", disabled=True, width="stretch")
-
-    st.info("The 4-step flow: Service selection → Upload → Auto-process → Results dashboard.")
+                st.button("Coming soon", key=f"svc_{svc['key']}", disabled=True, use_container_width=True)
 
 
 # ===========================
-# Step 2: Upload
+# Step 1: Upload
 # ===========================
 
 def render_step_upload():
-    st.subheader("Step 2 — Upload Inventory (.xlsx)")
-    if not st.session_state.get("selected_service"):
-        st.info("Select **Identify Scope** first.")
-        return
+    st.subheader("Step 1 — Upload")
+    uploaded_file = st.file_uploader("Upload .xlsx inventory file", type=["xlsx"], label_visibility="collapsed")
 
-    st.caption("We accept .xlsx files with the Storeganizer-required columns. Column aliases are handled automatically.")
-    uploaded_file = st.file_uploader("Upload Storeganizer inventory", type=["xlsx"])
     if uploaded_file:
         try:
             reset_processing_outputs()
@@ -847,9 +864,8 @@ def render_step_upload():
         except Exception as exc:  # pragma: no cover - defensive log
             st.error(f"Unexpected error reading file: {exc}")
 
-    st.markdown("---")
-    st.info("No file handy? Use the built-in sample to see the full experience.")
-    if st.button("📂 Load Example Dataset (80 SKUs)", key="load_example"):
+    load_example = st.button("Load Example", key="load_example")
+    if load_example:
         example_file_path = Path(__file__).parent / "sample_inventory.csv"
         if example_file_path.exists():
             try:
@@ -867,7 +883,7 @@ def render_step_upload():
     if st.session_state.get("inventory_raw") is not None:
         status = st.session_state.get("column_status") or {}
         missing_required = status.get("required_missing", [])
-        with st.expander("Column validation", expanded=True):
+        with st.expander("Column validation", expanded=False):
             col_a, col_b = st.columns(2)
             col_a.markdown("**Required present**")
             col_a.write(status.get("required_present", []))
@@ -878,76 +894,43 @@ def render_step_upload():
 
         # Smart preview: show a representative sample, not just first 10 rows
         raw_df = st.session_state["inventory_raw"]
+        # Quick summary line
         quality = analyze_data_quality(raw_df)
+        st.success(f"Loaded {len(raw_df):,} SKUs | {quality.get('completeness_score', 0)}% complete")
 
-        st.markdown("**Quick Stats**")
-        stat_cols = st.columns(4)
-        stat_cols[0].metric("Total SKUs", f"{len(raw_df):,}")
+        with st.expander("Data preview", expanded=False):
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("Total SKUs", f"{len(raw_df):,}")
 
-        # Weight distribution
-        if "weight_kg" in raw_df.columns:
-            weights = pd.to_numeric(raw_df["weight_kg"], errors="coerce")
-            under_limit = (weights <= config.DEFAULT_POCKET_WEIGHT_LIMIT).sum()
-            over_limit = (weights > config.DEFAULT_POCKET_WEIGHT_LIMIT).sum()
-            stat_cols[1].metric("Weight OK (≤20kg)", f"{under_limit:,}",
-                               delta=f"{over_limit:,} over" if over_limit > 0 else None,
-                               delta_color="inverse" if over_limit > 0 else "off")
+            if "weight_kg" in raw_df.columns:
+                weights = pd.to_numeric(raw_df["weight_kg"], errors="coerce")
+                under_limit = (weights <= config.DEFAULT_POCKET_WEIGHT_LIMIT).sum()
+                stat_cols[1].metric("Weight OK", f"{under_limit:,}")
 
-        # Dimension check (quick estimate using default pocket)
-        if all(c in raw_df.columns for c in ["width_mm", "depth_mm", "height_mm"]):
-            w = pd.to_numeric(raw_df["width_mm"], errors="coerce")
-            d = pd.to_numeric(raw_df["depth_mm"], errors="coerce")
-            h = pd.to_numeric(raw_df["height_mm"], errors="coerce")
-            fits_default = ((w <= config.DEFAULT_POCKET_WIDTH) &
-                           (d <= config.DEFAULT_POCKET_DEPTH) &
-                           (h <= config.DEFAULT_POCKET_HEIGHT)).sum()
-            stat_cols[2].metric("Fits Default Pocket", f"{fits_default:,}")
+            if all(c in raw_df.columns for c in ["width_mm", "depth_mm", "height_mm"]):
+                w = pd.to_numeric(raw_df["width_mm"], errors="coerce")
+                d = pd.to_numeric(raw_df["depth_mm"], errors="coerce")
+                h = pd.to_numeric(raw_df["height_mm"], errors="coerce")
+                fits_default = ((w <= config.DEFAULT_POCKET_WIDTH) &
+                               (d <= config.DEFAULT_POCKET_DEPTH) &
+                               (h <= config.DEFAULT_POCKET_HEIGHT)).sum()
+                stat_cols[2].metric("Fits Pocket", f"{fits_default:,}")
 
-        stat_cols[3].metric("Data Completeness", f"{quality.get('completeness_score', 0)}%")
+            stat_cols[3].metric("Completeness", f"{quality.get('completeness_score', 0)}%")
 
-        # Stratified preview: show likely-eligible vs likely-rejected
-        st.markdown("**Data Preview**")
-        preview_df = raw_df.copy()
-
-        # Quick eligibility estimate based on weight + dimensions
-        has_dims = all(c in preview_df.columns for c in ["width_mm", "depth_mm", "height_mm", "weight_kg"])
-        if has_dims:
-            w = pd.to_numeric(preview_df["width_mm"], errors="coerce").fillna(9999)
-            d = pd.to_numeric(preview_df["depth_mm"], errors="coerce").fillna(9999)
-            h = pd.to_numeric(preview_df["height_mm"], errors="coerce").fillna(9999)
-            wt = pd.to_numeric(preview_df["weight_kg"], errors="coerce").fillna(9999)
-
-            likely_eligible = (
-                (w <= config.DEFAULT_POCKET_WIDTH) &
-                (d <= config.DEFAULT_POCKET_DEPTH) &
-                (h <= config.DEFAULT_POCKET_HEIGHT) &
-                (wt <= config.DEFAULT_POCKET_WEIGHT_LIMIT)
-            )
-
-            eligible_sample = preview_df[likely_eligible].head(5)
-            rejected_sample = preview_df[~likely_eligible].head(5)
-
-            if len(eligible_sample) > 0:
-                st.markdown(f"**Likely eligible** ({likely_eligible.sum():,} total)")
-                st.dataframe(eligible_sample, width="stretch")
-
-            if len(rejected_sample) > 0:
-                st.markdown(f"**Likely rejected** ({(~likely_eligible).sum():,} total) — dimensions or weight exceed limits")
-                st.dataframe(rejected_sample, width="stretch")
-
-            if len(eligible_sample) == 0 and len(rejected_sample) == 0:
-                st.dataframe(preview_df.head(10), width="stretch")
-        else:
-            st.dataframe(preview_df.head(10), width="stretch")
+            st.dataframe(raw_df.head(10), height=200)
 
         if missing_required:
             st.warning("Missing required columns will block auto-processing.")
 
-    cols = st.columns([1, 1, 1])
-    if cols[0].button("Reset upload"):
-        reset_inventory_state()
-    if cols[2].button("Next: Auto-process", type="primary", disabled=st.session_state.get("inventory_raw") is None):
-        go_to_step(3)
+    # Navigation buttons
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+    with nav_col1:
+        if st.button("Reset", key="reset_upload_btn"):
+            reset_inventory_state()
+    with nav_col3:
+        if st.button("Next →", type="primary", disabled=st.session_state.get("inventory_raw") is None):
+            go_to_step(2)
 
 
 # ===========================
@@ -963,32 +946,23 @@ def render_step_auto_processing():
 
     # If already processed, show results
     if st.session_state.get("processing_done"):
-        eligible = len(st.session_state.get("inventory_filtered") or [])
+        inv_filtered = st.session_state.get("inventory_filtered")
+        eligible = 0 if inv_filtered is None else len(inv_filtered)
         rejected = st.session_state.get("rejected_count", 0)
         st.success(f"Processing complete. Eligible: {eligible:,} | Rejected: {rejected:,}.")
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Re-configure & Re-run", type="secondary"):
+            if st.button("Re-configure & Re-run", type="secondary", use_container_width=True):
                 st.session_state["processing_done"] = False
                 st.session_state["processing_started"] = False
                 st.rerun()
         with col2:
-            st.button("View results dashboard →", type="primary", on_click=lambda: go_to_step(4))
+            st.button("View results dashboard →", type="primary", on_click=lambda: go_to_step(4), use_container_width=True)
         return
 
     # === CONFIGURATION SECTION ===
-    st.markdown("### Filter Settings")
-    st.caption("Configure eligibility filters before processing. Only oversized/overweight are hardcoded.")
-
-    # Stockweeks filter (main configurable filter)
-    with st.expander("📊 Stockweeks Filter", expanded=True):
-        st.markdown("""
-        **Stockweeks** = ASSQ / EWS (weeks of stock that fit in one pocket)
-        - Too low → item sells too fast, needs constant replenishment
-        - Too high → item sits too long, wasting pocket space
-        """)
-
+    with st.expander("Stockweeks Filter", expanded=True):
         use_stockweeks = st.checkbox(
             "Enable stockweeks filter",
             value=st.session_state.get("use_stockweeks_filter", True),
@@ -1018,8 +992,7 @@ def render_step_auto_processing():
                 )
                 st.session_state["max_stockweeks"] = max_sw
 
-    # Other filters
-    with st.expander("🔧 Other Filters", expanded=False):
+    with st.expander("Other Filters", expanded=False):
         col1, col2 = st.columns(2)
 
         with col1:
@@ -1049,44 +1022,18 @@ def render_step_auto_processing():
             )
             st.session_state["velocity_band_filter"] = velocity
 
-    # Pocket size configuration
-    with st.expander("📐 Pocket Size", expanded=False):
-        pocket_size = st.selectbox(
-            "Pocket configuration",
-            options=["Large", "Medium", "Small", "XS", "Custom"],
-            index=1,  # Default to Medium
-            key="pocket_size_select",
-            help="Select pocket size or choose Custom for manual dimensions"
-        )
-
-        if pocket_size == "Custom":
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.session_state["elig_max_w"] = st.number_input("Width (mm)", value=450, step=10)
-            with col2:
-                st.session_state["elig_max_d"] = st.number_input("Depth (mm)", value=300, step=10)
-            with col3:
-                st.session_state["elig_max_h"] = st.number_input("Height (mm)", value=300, step=10)
-        else:
-            size_map = {
-                "XS": (300, 260, 150),
-                "Small": (300, 300, 300),
-                "Medium": (450, 300, 300),
-                "Large": (450, 500, 450),
-            }
-            w, d, h = size_map.get(pocket_size, (450, 300, 300))
-            st.session_state["elig_max_w"] = w
-            st.session_state["elig_max_d"] = d
-            st.session_state["elig_max_h"] = h
-            st.caption(f"Pocket dimensions: {w} × {d} × {h} mm")
-
-    # === PROCESS BUTTON ===
-    st.markdown("---")
+    # Pocket size selection removed - now using cascading allocation
+    # Articles will be assigned to the smallest pocket that fits (XS → S → M → L)
 
     if st.session_state.get("processing_error"):
         st.error(st.session_state["processing_error"])
 
-    if st.button("🚀 Run Processing", type="primary", width="stretch"):
+    # Constrain button width
+    process_col1, process_col2, process_col3 = st.columns([1, 2, 1])
+    with process_col2:
+        run_processing = st.button("Run Processing", type="primary", use_container_width=True)
+
+    if run_processing:
         st.session_state["processing_error"] = None
         with st.spinner("Running Storeganizer analysis..."):
             success = run_auto_processing_pipeline()
@@ -1119,6 +1066,28 @@ def render_step_results_dashboard():
     summary_cols[2].metric("Bay requirement", format_metric(st.session_state.get("bay_count", 0)))
     summary_cols[3].metric("Data completeness", f"{quality.get('completeness_score', 0)}%")
 
+    # Pocket size distribution (if cascading allocation was used)
+    if isinstance(filtered, pd.DataFrame) and "pocket_size" in filtered.columns:
+        with st.expander("Pocket size distribution", expanded=True):
+            # Order by size (XS → S → M → L), not alphabetically
+            size_order = ["XS", "Small", "Medium", "Large"]
+            pocket_counts = filtered["pocket_size"].value_counts()
+            pocket_counts = pocket_counts.reindex([s for s in size_order if s in pocket_counts.index])
+            if not pocket_counts.empty:
+                pocket_cols = st.columns(len(pocket_counts))
+                for idx, (size, count) in enumerate(pocket_counts.items()):
+                    pocket_cols[idx].metric(f"{size}", format_metric(count))
+
+                st.markdown("**Articles by pocket size:**")
+                pocket_summary = filtered.groupby("pocket_size").agg({
+                    "sku_code": "count",
+                    "width_mm": "mean",
+                    "depth_mm": "mean",
+                    "height_mm": "mean",
+                }).round(1)
+                pocket_summary.columns = ["Articles", "Avg Width (mm)", "Avg Depth (mm)", "Avg Height (mm)"]
+                st.dataframe(pocket_summary, width="stretch")
+
     cfg = recommended_cfg.get("config") or config.STANDARD_CONFIGS.get(config.DEFAULT_CONFIG_SIZE, {})
     cfg_name = cfg.get("name", "Medium")
     cfg_dims = f"{cfg.get('pocket_width', config.DEFAULT_POCKET_WIDTH)}×{cfg.get('pocket_depth', config.DEFAULT_POCKET_DEPTH)}×{cfg.get('pocket_height', config.DEFAULT_POCKET_HEIGHT)} mm"
@@ -1146,10 +1115,75 @@ def render_step_results_dashboard():
 
     if eligible_count == 0:
         st.error("No eligible SKUs yet. Review the rejection analysis and data quality alerts above.")
-        st.button("Re-upload data", on_click=lambda: go_to_step(2))
+        reupload_col1, reupload_col2, reupload_col3 = st.columns([1, 1, 1])
+        with reupload_col2:
+            st.button("Re-upload data", on_click=lambda: go_to_step(1), use_container_width=True)
     else:
-        st.markdown("**Eligible preview (top 15)**")
-        st.dataframe(filtered.head(15), width="stretch")
+        # === ELIGIBILITY TABLE WITH COLUMN SELECTOR ===
+        st.markdown("---")
+        st.markdown("### Eligibility Results")
+
+        # Get available columns from the filtered dataframe
+        all_columns = list(filtered.columns)
+
+        # Column selector UI
+        with st.expander("📊 Customize columns (Output Template)", expanded=True):
+            template_col, custom_col = st.columns([1, 2])
+
+            with template_col:
+                # Template selector
+                templates = st.session_state.get("output_templates", {})
+                template_names = list(templates.keys())
+
+                selected_template = st.selectbox(
+                    "Template",
+                    options=template_names,
+                    index=template_names.index(st.session_state.get("output_template_name", "Default")),
+                    key="template_selector",
+                    help="Pre-configured column sets for common use cases"
+                )
+
+                # Update session state when template changes
+                if selected_template != st.session_state.get("output_template_name"):
+                    st.session_state["output_template_name"] = selected_template
+                    template_cols = templates.get(selected_template)
+                    if template_cols:
+                        # Filter to columns that exist in the data
+                        st.session_state["output_visible_columns"] = [c for c in template_cols if c in all_columns]
+                    else:
+                        st.session_state["output_visible_columns"] = None  # Show all
+
+            with custom_col:
+                # Get current visible columns (from template or custom selection)
+                current_visible = st.session_state.get("output_visible_columns")
+                if current_visible is None:
+                    current_visible = all_columns  # Show all by default
+
+                # Multiselect for custom column selection
+                visible_columns = st.multiselect(
+                    "Visible columns",
+                    options=all_columns,
+                    default=[c for c in current_visible if c in all_columns],
+                    key="column_selector",
+                    help="Select which columns to display"
+                )
+
+                # Update session state when columns change
+                if visible_columns != st.session_state.get("output_visible_columns"):
+                    st.session_state["output_visible_columns"] = visible_columns
+                    # If user customizes columns, switch to "Custom" template name
+                    template_cols = templates.get(st.session_state.get("output_template_name"))
+                    if template_cols and set(visible_columns) != set([c for c in template_cols if c in all_columns]):
+                        st.session_state["output_template_name"] = "Custom"
+
+        # Display the filtered dataframe with selected columns
+        if visible_columns:
+            display_df = filtered[visible_columns]
+        else:
+            display_df = filtered
+
+        st.markdown(f"**Showing {len(display_df):,} eligible articles** ({len(visible_columns) if visible_columns else len(all_columns)} columns)")
+        st.dataframe(display_df, height=400, use_container_width=True)
 
     # === Configuration Recommendation & Pricing ===
     st.markdown("---")
@@ -1241,10 +1275,21 @@ def render_step_results_dashboard():
     )
     rejection_report = exports.create_rejection_report(rejected_df)
 
-    download_cols = st.columns(2)
+    # Get selected columns for custom export
+    selected_cols = st.session_state.get("output_visible_columns")
+    if selected_cols and isinstance(filtered, pd.DataFrame):
+        # Filter to columns that exist in the dataframe
+        export_cols = [c for c in selected_cols if c in filtered.columns]
+        custom_export_df = filtered[export_cols] if export_cols else filtered
+        template_name = st.session_state.get("output_template_name", "Custom")
+    else:
+        custom_export_df = filtered if isinstance(filtered, pd.DataFrame) else pd.DataFrame()
+        template_name = "Full"
+
+    download_cols = st.columns(3)
     with download_cols[0]:
         download_excel(
-            label="📊 Download results (.xlsx)",
+            label="📊 Full results",
             df=full_report,
             filename="storeganizer_results.xlsx",
             help="Eligible + rejected SKUs with status and reasoning",
@@ -1252,7 +1297,15 @@ def render_step_results_dashboard():
         )
     with download_cols[1]:
         download_excel(
-            label="🚫 Rejection details",
+            label=f"📋 Eligible ({template_name})",
+            df=custom_export_df,
+            filename=f"storeganizer_eligible_{template_name.lower()}.xlsx",
+            help=f"Eligible articles with {len(selected_cols) if selected_cols else 'all'} columns",
+            key="download_eligible_custom",
+        )
+    with download_cols[2]:
+        download_excel(
+            label="🚫 Rejections",
             df=rejection_report,
             filename="storeganizer_rejections.xlsx",
             help="Items excluded with reasons and dimensions",
@@ -1262,8 +1315,11 @@ def render_step_results_dashboard():
     # ROI Analysis CTA
     st.markdown("---")
     st.info("💡 **Ready to calculate ROI?** Proceed to Step 5 to estimate financial impact, payback period, and annual savings.")
-    if st.button("Next: ROI Analysis →", type="primary", width="stretch"):
-        go_to_step(5)
+
+    roi_cta_col1, roi_cta_col2, roi_cta_col3 = st.columns([1, 2, 1])
+    with roi_cta_col2:
+        if st.button("Next: ROI Analysis →", type="primary", use_container_width=True):
+            go_to_step(5)
 
 
 # ===========================
@@ -1459,8 +1515,12 @@ def render_step_roi_analysis():
 
     st.markdown("---")
 
-    # Calculate button
-    if st.button("📊 Calculate ROI", type="primary", width="stretch"):
+    # Calculate button (constrained)
+    calc_col1, calc_col2, calc_col3 = st.columns([1, 2, 1])
+    with calc_col2:
+        calculate_clicked = st.button("📊 Calculate ROI", type="primary", use_container_width=True)
+
+    if calculate_clicked:
         try:
             # Build inputs
             roi_inputs = ROIInputs(
@@ -1581,7 +1641,7 @@ def render_step_roi_analysis():
     st.markdown("---")
     nav_cols = st.columns([1, 1, 1])
     with nav_cols[0]:
-        st.button("← Back to Results", on_click=lambda: go_to_step(4))
+        st.button("← Back to Results", on_click=lambda: go_to_step(4), use_container_width=True)
     with nav_cols[2]:
         if results:
             st.success("✅ ROI analysis complete. You can now export or restart the wizard.")
@@ -1598,15 +1658,15 @@ def main():
     st.title(APP_TITLE)
     render_stepper()
 
-    render_lena_chat()
+    # render_lena_chat()  # Disabled for now
 
     step = st.session_state["wizard_step"]
     with st.container():
         render_top_nav()
         if step == 1:
-            render_step_service_selection()
-        elif step == 2:
             render_step_upload()
+        elif step == 2:
+            render_step_service_selection()
         elif step == 3:
             render_step_auto_processing()
         elif step == 4:
@@ -1614,23 +1674,28 @@ def main():
         elif step == 5:
             render_step_roi_analysis()
         else:
-            render_step_service_selection()
+            render_step_upload()
 
     st.markdown("---")
     nav_cols = st.columns([1, 1, 1])
     next_disabled = step == len(WIZARD_STEPS) or not can_advance(step)
     with nav_cols[0]:
-        st.button("Previous", key="nav_prev", disabled=step == 1, on_click=lambda: go_to_step(step - 1))
+        # Only show Previous if not on Step 1
+        if step > 1:
+            st.button("Previous", key="nav_prev", on_click=lambda: go_to_step(step - 1), use_container_width=True)
     with nav_cols[1]:
-        st.button("Home & Discard", key="nav_home_discard", on_click=discard_changes_and_home)
+        st.button("Home & Discard", key="nav_home_discard", on_click=discard_changes_and_home, use_container_width=True)
     with nav_cols[2]:
-        st.button(
-            "Next",
-            key="nav_next",
-            disabled=next_disabled,
-            type="primary",
-            on_click=lambda: go_to_step(step + 1),
-        )
+        # Only show Next if not on Step 1 (Step 1 has its own internal navigation)
+        if step > 1:
+            st.button(
+                "Next",
+                key="nav_next",
+                disabled=next_disabled,
+                type="primary",
+                on_click=lambda: go_to_step(step + 1),
+                use_container_width=True,
+            )
 
 
 if __name__ == "__main__":

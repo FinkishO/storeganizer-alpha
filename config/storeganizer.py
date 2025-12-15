@@ -9,9 +9,9 @@ All Storeganizer product specifications, dimensions, and business rules.
 # ===========================
 
 # Default pocket/cell dimensions (mm) - align with Medium preset
-# FROM OFFICIAL BUYING GUIDE: Medium = 450 x 300 x 300 mm
-DEFAULT_POCKET_WIDTH = 450
-DEFAULT_POCKET_DEPTH = 300
+# FROM JAN'S STOREGANIZER SPECS: Medium = 300 x 450 x 300 mm (W×D×H)
+DEFAULT_POCKET_WIDTH = 300
+DEFAULT_POCKET_DEPTH = 450
 DEFAULT_POCKET_HEIGHT = 300
 
 # Weight limits (kg)
@@ -40,9 +40,9 @@ STANDARD_CONFIGS = {
     "xs": {
         "name": "Extra Small",
         "description": "Compact pockets for small items",
-        "pocket_width": 300,   # From buying guide
-        "pocket_depth": 260,   # From buying guide
-        "pocket_height": 150,  # From buying guide
+        "pocket_width": 260,   # From Jan's Storeganizer specs
+        "pocket_depth": 300,   # From Jan's Storeganizer specs
+        "pocket_height": 150,  # From Jan's Storeganizer specs
         "pocket_weight_limit": 20.0,  # Same for all sizes
         "pockets_per_column": 13,  # Vertical stacking
         "rows_deep": 4,  # 4 rows front-to-back
@@ -76,9 +76,9 @@ STANDARD_CONFIGS = {
     "medium": {
         "name": "Medium",
         "description": "Most popular - balanced capacity",
-        "pocket_width": 450,   # From buying guide
-        "pocket_depth": 300,   # From buying guide (NOT 500!)
-        "pocket_height": 300,  # From buying guide (NOT 450!)
+        "pocket_width": 300,   # From Jan's Storeganizer specs
+        "pocket_depth": 450,   # From Jan's Storeganizer specs
+        "pocket_height": 300,  # From Jan's Storeganizer specs
         "pocket_weight_limit": 20.0,
         "pockets_per_column": 6,  # Vertical stacking
         "rows_deep": 3,  # 3 rows front-to-back
@@ -95,9 +95,9 @@ STANDARD_CONFIGS = {
     "large": {
         "name": "Large",
         "description": "Larger items, deeper pockets",
-        "pocket_width": 450,   # From buying guide (NOT 500!)
-        "pocket_depth": 500,   # From buying guide
-        "pocket_height": 450,  # From buying guide
+        "pocket_width": 500,   # From Jan's Storeganizer specs
+        "pocket_depth": 450,   # From Jan's Storeganizer specs
+        "pocket_height": 450,  # From Jan's Storeganizer specs
         "pocket_weight_limit": 20.0,  # Same 20kg limit (NOT 25!)
         "pockets_per_column": 4,  # Vertical stacking
         "rows_deep": 2,  # 2 rows front-to-back

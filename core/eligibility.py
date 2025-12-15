@@ -489,3 +489,191 @@ def get_rejection_summary(rejection_reasons: dict) -> str:
         lines.append(f"  - {reason.replace('_', ' ').title()}: {count} items")
 
     return "\n".join(lines)
+
+
+def apply_cascading_pocket_allocation(
+    df: pd.DataFrame,
+    max_weight_kg: float = None,
+    velocity_band: str = "All",
+    min_stockweeks: float = None,
+    max_stockweeks: float = None,
+    use_stockweeks_filter: bool = None,
+    allow_squeeze: bool = False,
+    remove_fragile: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, int, dict]:
+    """
+    Apply cascading pocket allocation: try XS → S → M → L for each article.
+    Assign each article to the SMALLEST pocket that fits its dimensions.
+
+    Pocket sizes (from config.STANDARD_CONFIGS):
+    - XS: 300×260×150mm (W×D×H)
+    - S:  300×300×300mm
+    - M:  450×300×300mm
+    - L:  450×500×450mm
+
+    Args:
+        df: Input DataFrame with dimensions
+        max_weight_kg: Maximum weight per pocket (same for all sizes)
+        velocity_band: Velocity filter ("All", "A", "B", "C")
+        min_stockweeks: Minimum weeks of stock
+        max_stockweeks: Maximum weeks of stock
+        use_stockweeks_filter: Use stockweeks filter
+        allow_squeeze: Allow 10% width overage for soft packaging
+        remove_fragile: Remove fragile items
+
+    Returns:
+        Tuple of (eligible_df, rejected_df, rejected_count, rejection_reasons_dict)
+    """
+    if df is None or len(df) == 0:
+        return df, pd.DataFrame(), 0, {}
+
+    # Use config defaults if not specified
+    max_weight_kg = max_weight_kg or config.DEFAULT_POCKET_WEIGHT_LIMIT
+    use_stockweeks = use_stockweeks_filter if use_stockweeks_filter is not None else config.USE_STOCKWEEKS_FILTER
+    min_sw = min_stockweeks if min_stockweeks is not None else config.MIN_STOCKWEEKS
+    max_sw = max_stockweeks if max_stockweeks is not None else config.MAX_STOCKWEEKS
+
+    df_work = df.copy()
+
+    # Normalized numeric columns
+    width = pd.to_numeric(df_work.get("width_mm"), errors="coerce").fillna(0.0)
+    depth = pd.to_numeric(df_work.get("depth_mm"), errors="coerce").fillna(0.0)
+    height = pd.to_numeric(df_work.get("height_mm"), errors="coerce").fillna(0.0)
+    weight = pd.to_numeric(df_work.get("weight_kg"), errors="coerce").fillna(0.0)
+    weekly_demand = pd.to_numeric(df_work.get("weekly_demand"), errors="coerce").fillna(0.0)
+
+    width_multiplier = config.SQUEEZE_WIDTH_MULTIPLIER if allow_squeeze else 1.0
+
+    # Pocket sizes in order (smallest to largest)
+    # NOTE: Using official Storeganizer specs from config.STANDARD_CONFIGS
+    pocket_sizes = [
+        ("XS", config.STANDARD_CONFIGS["xs"]["pocket_width"],
+         config.STANDARD_CONFIGS["xs"]["pocket_depth"],
+         config.STANDARD_CONFIGS["xs"]["pocket_height"]),
+        ("Small", config.STANDARD_CONFIGS["small"]["pocket_width"],
+         config.STANDARD_CONFIGS["small"]["pocket_depth"],
+         config.STANDARD_CONFIGS["small"]["pocket_height"]),
+        ("Medium", config.STANDARD_CONFIGS["medium"]["pocket_width"],
+         config.STANDARD_CONFIGS["medium"]["pocket_depth"],
+         config.STANDARD_CONFIGS["medium"]["pocket_height"]),
+        ("Large", config.STANDARD_CONFIGS["large"]["pocket_width"],
+         config.STANDARD_CONFIGS["large"]["pocket_depth"],
+         config.STANDARD_CONFIGS["large"]["pocket_height"]),
+    ]
+
+    # Assign pocket size to each article
+    pocket_assignments = []
+    for idx in df_work.index:
+        w = width.loc[idx]
+        d = depth.loc[idx]
+        h = height.loc[idx]
+
+        # Skip invalid dimensions (will be rejected later)
+        if w <= 0 or d <= 0 or h <= 0:
+            pocket_assignments.append(None)
+            continue
+
+        # Try each pocket size in order (smallest to largest)
+        assigned = None
+        for size_name, max_w, max_d, max_h in pocket_sizes:
+            effective_max_w = max_w * width_multiplier
+            if w <= effective_max_w and d <= max_d and h <= max_h:
+                assigned = size_name
+                break
+
+        pocket_assignments.append(assigned)
+
+    df_work["pocket_size"] = pocket_assignments
+
+    # === HARDCODED FILTERS (always applied) ===
+
+    # 1. Dimension check - must fit at least ONE pocket size
+    dimension_ok = df_work["pocket_size"].notna()
+
+    # 2. Weight check (must be under limit)
+    weight_ok = (weight > 0) & (weight <= max_weight_kg)
+
+    # === CONFIGURABLE FILTERS ===
+
+    # 3. Velocity band filter (optional)
+    if velocity_band == "All" or "velocity_band" not in df_work.columns:
+        velocity_ok = pd.Series(True, index=df_work.index)
+    else:
+        if velocity_band == "A":
+            allowed = ["A"]
+        elif velocity_band == "B":
+            allowed = ["A", "B"]
+        elif velocity_band == "C":
+            allowed = ["A", "B", "C"]
+        else:
+            allowed = []
+        velocity_ok = df_work["velocity_band"].isin(allowed)
+
+    # 4. Stockweeks filter
+    if use_stockweeks:
+        # Calculate stockweeks = ASSQ / EWS
+        if "assq_units" in df_work.columns:
+            assq = pd.to_numeric(df_work["assq_units"], errors="coerce").fillna(1)
+        else:
+            assq = pd.Series(1, index=df_work.index)
+
+        # Avoid division by zero
+        stockweeks = assq / weekly_demand.where(weekly_demand > 0, 1)
+        stockweeks = stockweeks.where(weekly_demand > 0, float('inf'))
+        df_work["stockweeks"] = stockweeks.round(2)
+
+        stockweeks_ok = (stockweeks >= min_sw) & (stockweeks <= max_sw)
+    else:
+        stockweeks_ok = pd.Series(True, index=df_work.index)
+        stockweeks = pd.Series(0, index=df_work.index)
+
+    # 5. Fragile filter (optional)
+    if not remove_fragile or "description" not in df_work.columns:
+        fragile_ok = pd.Series(True, index=df_work.index)
+    else:
+        pattern = "|".join(config.FRAGILE_KEYWORDS)
+        fragile_ok = ~df_work["description"].str.contains(pattern, case=False, na=False)
+
+    # Build reason strings for EACH article
+    reason_strings = []
+    for idx in df_work.index:
+        row_reasons: List[str] = []
+        if not dimension_ok.loc[idx]:
+            row_reasons.append(f"Too large for any pocket (W:{width.loc[idx]:.0f} D:{depth.loc[idx]:.0f} H:{height.loc[idx]:.0f})")
+        if not weight_ok.loc[idx]:
+            row_reasons.append(f"Overweight ({weight.loc[idx]:.1f}kg > {max_weight_kg}kg)")
+        if not velocity_ok.loc[idx] and velocity_band != "All":
+            vb = df_work.at[idx, 'velocity_band'] if 'velocity_band' in df_work.columns else '?'
+            row_reasons.append(f"Velocity band {vb} excluded")
+        if not stockweeks_ok.loc[idx]:
+            sw = stockweeks.loc[idx]
+            if sw < min_sw:
+                row_reasons.append(f"Sells too fast ({sw:.1f} weeks < {min_sw} min)")
+            elif sw > max_sw:
+                row_reasons.append(f"Too slow ({sw:.1f} weeks > {max_sw} max)")
+        if not fragile_ok.loc[idx]:
+            row_reasons.append("Fragile item excluded")
+        reason_strings.append("; ".join(row_reasons))
+
+    reason_series = pd.Series(reason_strings, index=df_work.index)
+
+    eligible_mask = dimension_ok & weight_ok & velocity_ok & stockweeks_ok & fragile_ok
+    eligible_df = df_work[eligible_mask].copy()
+    rejected_df = df_work[~eligible_mask].copy()
+    rejected_df["rejection_reason"] = reason_series[~eligible_mask]
+
+    # Count rejections by reason
+    rejection_reasons = {}
+    if (~dimension_ok).any():
+        rejection_reasons["dimensions_oversized"] = int((~dimension_ok).sum())
+    if (~weight_ok).any():
+        rejection_reasons["weight_overweight"] = int((~weight_ok).sum())
+    if velocity_band != "All" and (~velocity_ok).any():
+        rejection_reasons["velocity_band"] = int((~velocity_ok).sum())
+    if use_stockweeks and (~stockweeks_ok).any():
+        rejection_reasons["stockweeks_out_of_range"] = int((~stockweeks_ok).sum())
+    if remove_fragile and (~fragile_ok).any():
+        rejection_reasons["fragile_excluded"] = int((~fragile_ok).sum())
+
+    rejected_count = len(rejected_df)
+    return eligible_df, rejected_df, rejected_count, rejection_reasons
