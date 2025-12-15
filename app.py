@@ -131,15 +131,6 @@ def init_session_state():
         "roi_efficiency_increase": 15.0,  # Store as percentage (15% = 15.0)
         "roi_investment": 35000.0,
         "roi_results": None,
-        # Output template settings (column selection for eligibility preview)
-        "output_template_name": "Default",
-        "output_visible_columns": None,  # None = show all columns
-        "output_templates": {
-            "Default": None,  # Show all
-            "Compact": ["sku_code", "description", "pocket_size", "stockweeks"],
-            "Dimensions": ["sku_code", "description", "width_mm", "depth_mm", "height_mm", "weight_kg", "pocket_size"],
-            "Planning": ["sku_code", "description", "pocket_size", "assq_units", "stockweeks", "weekly_demand", "velocity_band"],
-        },
     }
 
     for key, value in defaults.items():
@@ -1140,71 +1131,10 @@ def render_step_results_dashboard():
         with reupload_col2:
             st.button("Re-upload data", on_click=lambda: go_to_step(1), use_container_width=True)
     else:
-        # === ELIGIBILITY TABLE WITH COLUMN SELECTOR ===
         st.markdown("---")
-        st.markdown("### Eligibility Results")
-
-        # Get available columns from the filtered dataframe
-        all_columns = list(filtered.columns)
-
-        # Column selector UI
-        with st.expander("📊 Customize columns (Output Template)", expanded=True):
-            template_col, custom_col = st.columns([1, 2])
-
-            with template_col:
-                # Template selector
-                templates = st.session_state.get("output_templates", {})
-                template_names = list(templates.keys())
-
-                selected_template = st.selectbox(
-                    "Template",
-                    options=template_names,
-                    index=template_names.index(st.session_state.get("output_template_name", "Default")),
-                    key="template_selector",
-                    help="Pre-configured column sets for common use cases"
-                )
-
-                # Update session state when template changes
-                if selected_template != st.session_state.get("output_template_name"):
-                    st.session_state["output_template_name"] = selected_template
-                    template_cols = templates.get(selected_template)
-                    if template_cols:
-                        # Filter to columns that exist in the data
-                        st.session_state["output_visible_columns"] = [c for c in template_cols if c in all_columns]
-                    else:
-                        st.session_state["output_visible_columns"] = None  # Show all
-
-            with custom_col:
-                # Get current visible columns (from template or custom selection)
-                current_visible = st.session_state.get("output_visible_columns")
-                if current_visible is None:
-                    current_visible = all_columns  # Show all by default
-
-                # Multiselect for custom column selection
-                visible_columns = st.multiselect(
-                    "Visible columns",
-                    options=all_columns,
-                    default=[c for c in current_visible if c in all_columns],
-                    key="column_selector",
-                    help="Select which columns to display"
-                )
-
-                # Update session state when columns change
-                if visible_columns != st.session_state.get("output_visible_columns"):
-                    st.session_state["output_visible_columns"] = visible_columns
-                    # If user customizes columns, switch to "Custom" template name
-                    template_cols = templates.get(st.session_state.get("output_template_name"))
-                    if template_cols and set(visible_columns) != set([c for c in template_cols if c in all_columns]):
-                        st.session_state["output_template_name"] = "Custom"
-
-        # Display the filtered dataframe with selected columns
-        if visible_columns:
-            display_df = filtered[visible_columns]
-        else:
-            display_df = filtered
-
-        st.markdown(f"**Showing {len(display_df):,} eligible articles** ({len(visible_columns) if visible_columns else len(all_columns)} columns)")
-        st.dataframe(display_df, height=400, use_container_width=True)
+        st.markdown("### Eligible Articles")
+        st.markdown(f"**{len(filtered):,} articles** — all columns shown")
+        st.dataframe(filtered, height=400, use_container_width=True)
 
     # === Configuration Recommendation & Pricing ===
     st.markdown("---")
@@ -1296,40 +1226,29 @@ def render_step_results_dashboard():
     )
     rejection_report = exports.create_rejection_report(rejected_df)
 
-    # Get selected columns for custom export
-    selected_cols = st.session_state.get("output_visible_columns")
-    if selected_cols and isinstance(filtered, pd.DataFrame):
-        # Filter to columns that exist in the dataframe
-        export_cols = [c for c in selected_cols if c in filtered.columns]
-        custom_export_df = filtered[export_cols] if export_cols else filtered
-        template_name = st.session_state.get("output_template_name", "Custom")
-    else:
-        custom_export_df = filtered if isinstance(filtered, pd.DataFrame) else pd.DataFrame()
-        template_name = "Full"
-
     download_cols = st.columns(3)
     with download_cols[0]:
         download_excel(
-            label="📊 Full results",
+            label="📊 Full report",
             df=full_report,
             filename="storeganizer_results.xlsx",
-            help="Eligible + rejected SKUs with status and reasoning",
+            help="Eligible + rejected SKUs with status",
             key="download_results",
         )
     with download_cols[1]:
         download_excel(
-            label=f"📋 Eligible ({template_name})",
-            df=custom_export_df,
-            filename=f"storeganizer_eligible_{template_name.lower()}.xlsx",
-            help=f"Eligible articles with {len(selected_cols) if selected_cols else 'all'} columns",
-            key="download_eligible_custom",
+            label="✅ Eligible",
+            df=filtered if isinstance(filtered, pd.DataFrame) else pd.DataFrame(),
+            filename="storeganizer_eligible.xlsx",
+            help="Eligible articles only",
+            key="download_eligible",
         )
     with download_cols[2]:
         download_excel(
-            label="🚫 Rejections",
+            label="🚫 Rejected",
             df=rejection_report,
             filename="storeganizer_rejections.xlsx",
-            help="Items excluded with reasons and dimensions",
+            help="Rejected articles with reasons",
             key="download_rejections",
         )
 
