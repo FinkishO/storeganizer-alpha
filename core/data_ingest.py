@@ -269,6 +269,14 @@ def load_inventory_file(
     df = add_optional_columns(df)
     df = coerce_types(df)
 
+    # Remove garbage rows (empty/placeholder descriptions like "0", "nan", etc.)
+    if "description" in df.columns:
+        desc = df["description"].astype(str).str.strip().str.lower()
+        valid_rows = ~((desc == "0") | (desc == "nan") | (desc == "") | (desc == "none"))
+        garbage_count = (~valid_rows).sum()
+        if garbage_count > 0:
+            df = df[valid_rows].copy()
+
     # Validate
     is_valid, missing = validate_required_columns(df)
     if not is_valid:

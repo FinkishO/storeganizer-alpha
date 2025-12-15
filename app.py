@@ -1192,25 +1192,29 @@ def rerun_with_refinements():
             library = get_article_library()
             enriched_df, _ = library.enrich_dataframe(enriched_df, "sku_code")
 
-        # Apply SM 0 filter if enabled
-        if st.session_state.get("refine_sm0_only", False):
+        # Apply SM filter if any SM options selected
+        sm_selection = st.session_state.get("refine_sm_selection", [])
+        if sm_selection:
             sm_cols = [c for c in enriched_df.columns if "wished sm" in c.lower() or c.upper() in ["SM", "SALES METHOD", "STOCK MODEL"]]
             if sm_cols:
                 sm_col = sm_cols[0]
                 sm_vals = pd.to_numeric(enriched_df[sm_col], errors="coerce")
-                enriched_df = enriched_df[sm_vals == 0].copy()
+                # Filter to only selected SM values
+                enriched_df = enriched_df[sm_vals.isin(sm_selection)].copy()
 
         # Apply whitelist/requested filter if enabled
         if st.session_state.get("refine_requested_only", False):
             whitelist_info = st.session_state.get("whitelist_info", {})
             if whitelist_info.get("detected") and whitelist_info.get("article_numbers"):
                 whitelist_articles = set(str(a).strip() for a in whitelist_info["article_numbers"])
-                # Find article column in enriched_df
+                # Find article column in enriched_df (check multiple patterns)
                 article_col = None
                 for col in enriched_df.columns:
-                    if col.lower() in ["sku_code", "article number", "article_number", "pa"]:
-                        article_col = col
-                        break
+                    col_lower = col.lower().strip()
+                    if col_lower in ["sku_code", "article number", "article_number", "pa"] or "article" in col_lower:
+                        if "name" not in col_lower:  # Skip "Article Name"
+                            article_col = col
+                            break
                 if article_col:
                     enriched_df = enriched_df[enriched_df[article_col].astype(str).str.strip().isin(whitelist_articles)].copy()
 
@@ -1314,13 +1318,23 @@ def render_step_results_dashboard():
         st.session_state["refine_no_fragile"] = no_fragile
 
     with refine_cols[2]:
-        sm0_only = st.checkbox(
-            "SM 0 only",
-            value=st.session_state.get("refine_sm0_only", False),
-            key="refine_sm0_cb",
-            help="Only articles with SM = 0"
-        )
-        st.session_state["refine_sm0_only"] = sm0_only
+        # SM filter - multiselect for SM 0/1/2
+        st.markdown("**SM Filter**", help="Sales Method / Stock Model")
+        sm_cols_container = st.columns(3)
+        current_sm = st.session_state.get("refine_sm_selection", [])
+
+        with sm_cols_container[0]:
+            sm0 = st.checkbox("SM0", value=0 in current_sm, key="sm0_cb")
+        with sm_cols_container[1]:
+            sm1 = st.checkbox("SM1", value=1 in current_sm, key="sm1_cb")
+        with sm_cols_container[2]:
+            sm2 = st.checkbox("SM2", value=2 in current_sm, key="sm2_cb")
+
+        sm_selection = []
+        if sm0: sm_selection.append(0)
+        if sm1: sm_selection.append(1)
+        if sm2: sm_selection.append(2)
+        st.session_state["refine_sm_selection"] = sm_selection
 
     with refine_cols[3]:
         # Requested/whitelist filter - only enabled if detected
