@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import asdict
+from math import ceil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -1061,159 +1062,169 @@ def render_step_auto_processing():
 # Step 4: Results Dashboard
 # ===========================
 
+# Columns to EXCLUDE from eligibility display (IKEA internal fields)
+COLUMNS_TO_EXCLUDE = [
+    "pia facts", "pia_facts", "piafacts",
+    "vat%", "vat_pct", "vat",
+    "price ladder", "price_ladder", "priceladder",
+    "style expression", "style_expression", "styleexpression",
+    "4a+k", "4a_k", "4ak",
+    "gm0%", "gm0_pct", "gm0",
+    "gm55+", "gm55_plus", "gm55",
+    "business approved", "business_approved", "businessapproved",
+    "stocked",
+    "wished presented", "wished_presented", "wishedpresented",
+    "online order", "online_order", "onlineorder",
+    "to be planned", "to_be_planned", "tobeplanned",
+    "range allocation", "range_allocation", "rangeallocation",
+]
+
+
+def format_date_column_mmyyyy(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
+    """Format a date column as MM-YYYY if it exists."""
+    if col_name not in df.columns:
+        return df
+    df = df.copy()
+    try:
+        # Try to parse as datetime and format
+        dates = pd.to_datetime(df[col_name], errors="coerce")
+        df[col_name] = dates.dt.strftime("%m-%Y").fillna(df[col_name])
+    except Exception:
+        pass  # Keep original if parsing fails
+    return df
+
+
+def calculate_bay_requirements_by_size(filtered_df: pd.DataFrame) -> dict:
+    """
+    Calculate bay requirements per pocket size using actual cells_per_bay values.
+
+    Returns dict with per-size breakdown and total.
+    """
+    if filtered_df is None or len(filtered_df) == 0 or "pocket_size" not in filtered_df.columns:
+        return {"total": 0, "breakdown": {}}
+
+    # Map pocket size names to config keys
+    size_to_key = {"XS": "xs", "Small": "small", "Medium": "medium", "Large": "large"}
+
+    breakdown = {}
+    total_bays = 0
+
+    for size_name, config_key in size_to_key.items():
+        count = len(filtered_df[filtered_df["pocket_size"] == size_name])
+        if count > 0:
+            cfg = config.STANDARD_CONFIGS.get(config_key, {})
+            cells_per_bay = cfg.get("cells_per_bay", 90)
+            bays_needed = ceil(count / cells_per_bay)
+            breakdown[size_name] = {
+                "articles": count,
+                "cells_per_bay": cells_per_bay,
+                "bays_needed": bays_needed,
+            }
+            total_bays += bays_needed
+
+    return {"total": total_bays, "breakdown": breakdown}
+
+
+def filter_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove unwanted columns and format dates."""
+    if df is None or len(df) == 0:
+        return df
+
+    df = df.copy()
+
+    # Remove excluded columns (case-insensitive)
+    cols_to_drop = []
+    for col in df.columns:
+        col_lower = col.lower().replace(" ", "").replace("_", "")
+        for exclude in COLUMNS_TO_EXCLUDE:
+            if exclude.replace(" ", "").replace("_", "") == col_lower:
+                cols_to_drop.append(col)
+                break
+    df = df.drop(columns=cols_to_drop, errors="ignore")
+
+    # Format SSD and EDS columns as MM-YYYY
+    for col in df.columns:
+        col_lower = col.lower()
+        if "ssd" in col_lower or "eds" in col_lower:
+            df = format_date_column_mmyyyy(df, col)
+
+    return df
+
+
 def render_step_results_dashboard():
-    st.subheader("Step 4 — Results Dashboard")
+    st.subheader("Step 4 — Results")
     filtered = st.session_state.get("inventory_filtered")
     rejected_df = st.session_state.get("rejected_items")
     quality = st.session_state.get("data_quality") or {}
-    recommended_cfg = st.session_state.get("recommended_config") or {}
 
     eligible_count = len(filtered) if isinstance(filtered, pd.DataFrame) else 0
     rejected_count = len(rejected_df) if isinstance(rejected_df, pd.DataFrame) else st.session_state.get("rejected_count", 0)
-    total_rows = quality.get("rows") or (eligible_count + rejected_count)
 
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("Eligible SKUs", format_metric(eligible_count))
-    summary_cols[1].metric("Rejected SKUs", format_metric(rejected_count))
-    summary_cols[2].metric("Bay requirement", format_metric(st.session_state.get("bay_count", 0)))
-    summary_cols[3].metric("Data completeness", f"{quality.get('completeness_score', 0)}%")
+    # Calculate bay requirements per pocket size (CORRECT calculation)
+    bay_calc = calculate_bay_requirements_by_size(filtered)
+    total_bays = bay_calc["total"]
 
-    # Pocket size distribution (if cascading allocation was used)
+    # Summary metrics
+    summary_cols = st.columns(3)
+    summary_cols[0].metric("Eligible", format_metric(eligible_count))
+    summary_cols[1].metric("Rejected", format_metric(rejected_count))
+    summary_cols[2].metric("Total Bays", format_metric(total_bays))
+
+    # Pocket size distribution with bay breakdown
     if isinstance(filtered, pd.DataFrame) and "pocket_size" in filtered.columns:
-        with st.expander("Pocket size distribution", expanded=True):
-            # Order by size (XS → S → M → L), not alphabetically
-            size_order = ["XS", "Small", "Medium", "Large"]
-            pocket_counts = filtered["pocket_size"].value_counts()
-            pocket_counts = pocket_counts.reindex([s for s in size_order if s in pocket_counts.index])
-            if not pocket_counts.empty:
-                pocket_cols = st.columns(len(pocket_counts))
-                for idx, (size, count) in enumerate(pocket_counts.items()):
-                    pocket_cols[idx].metric(f"{size}", format_metric(count))
+        st.markdown("### Pocket Distribution & Bay Requirements")
+        size_order = ["XS", "Small", "Medium", "Large"]
+        breakdown = bay_calc.get("breakdown", {})
 
-                st.markdown("**Articles by pocket size:**")
-                pocket_summary = filtered.groupby("pocket_size").agg({
-                    "sku_code": "count",
-                    "width_mm": "mean",
-                    "depth_mm": "mean",
-                    "height_mm": "mean",
-                }).round(1)
-                pocket_summary.columns = ["Articles", "Avg Width (mm)", "Avg Depth (mm)", "Avg Height (mm)"]
-                st.dataframe(pocket_summary, width="stretch")
+        if breakdown:
+            # Create summary table
+            rows = []
+            for size in size_order:
+                if size in breakdown:
+                    info = breakdown[size]
+                    rows.append({
+                        "Pocket Size": size,
+                        "Articles": info["articles"],
+                        "Cells/Bay": info["cells_per_bay"],
+                        "Bays Needed": info["bays_needed"],
+                    })
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    cfg = recommended_cfg.get("config") or config.STANDARD_CONFIGS.get(config.DEFAULT_CONFIG_SIZE, {})
-    cfg_name = cfg.get("name", "Medium")
-    cfg_dims = f"{cfg.get('pocket_width', config.DEFAULT_POCKET_WIDTH)}×{cfg.get('pocket_depth', config.DEFAULT_POCKET_DEPTH)}×{cfg.get('pocket_height', config.DEFAULT_POCKET_HEIGHT)} mm"
-    st.info(f"Recommended configuration: **{cfg_name}** ({cfg_dims}). {recommended_cfg.get('reason', '')}")
+        # ASSQ insight
+        if "assq_units" in filtered.columns:
+            avg_assq = filtered["assq_units"].mean()
+            total_pockets = filtered["assq_units"].count()  # 1 pocket per article (rough)
+            st.caption(f"Avg ASSQ: {avg_assq:.1f} units/pocket | {total_pockets:,} pockets needed (1 per article)")
 
+    # Data quality alerts (collapsed)
     if quality.get("alerts"):
-        with st.expander("Data quality summary", expanded=True):
-            st.markdown(f"Rows analyzed: {total_rows}")
-            st.markdown("**Key alerts**")
+        with st.expander("Data quality", expanded=False):
             for alert in quality["alerts"]:
                 st.markdown(f"- {alert}")
-            missing = quality.get("missing", {})
-            if missing:
-                st.markdown("**Missing values**")
-                st.write({k: v for k, v in missing.items() if v > 0})
 
+    # Rejection analysis (collapsed)
     insights = st.session_state.get("smart_rejections", [])
-    with st.expander("Rejection analysis", expanded=True):
-        if insights:
-            for insight in insights:
-                st.markdown(f"**{insight['title']}** — {insight['detail']}")
-                st.caption(f"Recovery: {insight['suggestion']}")
-        else:
-            st.markdown("No rejections. Great job!")
+    if rejected_count > 0:
+        with st.expander(f"Rejection analysis ({rejected_count} items)", expanded=False):
+            if insights:
+                for insight in insights:
+                    st.markdown(f"**{insight['title']}** — {insight['detail']}")
+                    st.caption(f"Recovery: {insight['suggestion']}")
+            else:
+                st.markdown("No specific rejection patterns detected.")
 
+    # Eligible articles table
     if eligible_count == 0:
-        st.error("No eligible SKUs yet. Review the rejection analysis and data quality alerts above.")
-        reupload_col1, reupload_col2, reupload_col3 = st.columns([1, 1, 1])
-        with reupload_col2:
-            st.button("Re-upload data", on_click=lambda: go_to_step(1), use_container_width=True)
+        st.error("No eligible articles. Check rejection analysis above.")
     else:
         st.markdown("---")
         st.markdown("### Eligible Articles")
-        st.markdown(f"**{len(filtered):,} articles** — all columns shown")
-        st.dataframe(filtered, height=400, use_container_width=True)
 
-    # === Configuration Recommendation & Pricing ===
-    st.markdown("---")
-    with st.expander("📦 Configuration Recommendation & Pricing", expanded=True):
-        rec_cols = st.columns([2, 1])
-
-        with rec_cols[0]:
-            st.markdown(f"### Recommended: **{cfg_name}**")
-            st.markdown(f"**Pocket dimensions:** {cfg_dims}")
-            st.markdown(f"**Cells per bay:** {cfg.get('cells_per_bay', 90)}")
-            st.markdown(f"**Pockets per column:** {cfg.get('pockets_per_column', 6)}")
-            st.markdown(f"**Rows deep:** {cfg.get('rows_deep', 3)}")
-
-            reason = recommended_cfg.get("reason", "")
-            if reason:
-                st.info(f"💡 {reason}")
-
-        with rec_cols[1]:
-            bay_count = st.session_state.get("bay_count", 0)
-            st.metric("Bays required", bay_count if bay_count > 0 else "—")
-            cells_total = bay_count * cfg.get("cells_per_bay", 90) if bay_count > 0 else 0
-            st.metric("Total pockets", f"{cells_total:,}" if cells_total > 0 else "—")
-
-        # Size comparison table
-        st.markdown("#### Size Comparison")
-        size_data = []
-        for size_key, size_cfg in config.STANDARD_CONFIGS.items():
-            # Calculate fit percentage for this size
-            eligible = st.session_state.get("inventory_filtered")
-            fit_count = 0
-            if isinstance(eligible, pd.DataFrame) and len(eligible) > 0:
-                max_w = size_cfg.get("pocket_width", 450)
-                max_d = size_cfg.get("pocket_depth", 300)
-                max_h = size_cfg.get("pocket_height", 300)
-                fit_mask = (
-                    (eligible.get("width_mm", pd.Series([0])) <= max_w) &
-                    (eligible.get("depth_mm", pd.Series([0])) <= max_d) &
-                    (eligible.get("height_mm", pd.Series([0])) <= max_h)
-                )
-                fit_count = fit_mask.sum() if hasattr(fit_mask, 'sum') else 0
-
-            size_data.append({
-                "Size": size_cfg.get("name", size_key.capitalize()),
-                "Pocket (WxDxH mm)": f"{size_cfg.get('pocket_width')}×{size_cfg.get('pocket_depth')}×{size_cfg.get('pocket_height')}",
-                "Cells/Bay": size_cfg.get("cells_per_bay", "—"),
-                "SKUs Fit": fit_count if fit_count > 0 else "—",
-                "Recommended": "✓" if size_key.lower() == cfg_name.lower() or size_cfg.get("name", "").lower() == cfg_name.lower() else "",
-            })
-        st.dataframe(pd.DataFrame(size_data), width="stretch", hide_index=True)
-
-        # Pricing CTA
-        st.markdown("#### Pricing")
-        st.warning(
-            "💰 **Pricing is project-specific.** Contact Storeganizer for a custom quote based on:\n"
-            "- Number of bays and configuration\n"
-            "- Installation requirements\n"
-            "- Location and logistics"
-        )
-        st.markdown(
-            "📧 **Request a quote:** [sales@storeganizer.com](mailto:sales@storeganizer.com) "
-            "or visit [storeganizer.com](https://storeganizer.com)"
-        )
-
-    # Actionable suggestions
-    suggestions = []
-    if rejected_count > 0 and insights:
-        suggestions.append("Address the top rejection driver first (e.g., width or missing dimensions).")
-    if quality.get("completeness_score", 0) < 90:
-        suggestions.append("Fill missing width/depth/height fields and re-run auto-processing.")
-    if cfg_name.lower() != "medium":
-        suggestions.append(f"Consider ordering {cfg_name} pockets to better fit the article mix.")
-    if bay_count > 0:
-        suggestions.append(f"Request pricing for {bay_count} {cfg_name} bays from Storeganizer.")
-    if not suggestions:
-        suggestions.append("Download the XLSX report and share with ops for ordering.")
-
-    st.markdown("### Next actions")
-    for item in suggestions:
-        st.markdown(f"- {item}")
+        # Apply column filtering and date formatting
+        display_df = filter_display_columns(filtered)
+        st.markdown(f"**{len(display_df):,} articles**")
+        st.dataframe(display_df, height=400, use_container_width=True)
 
     # Downloads
     st.markdown("### Downloads")
@@ -1252,14 +1263,6 @@ def render_step_results_dashboard():
             key="download_rejections",
         )
 
-    # ROI Analysis CTA
-    st.markdown("---")
-    st.info("💡 **Ready to calculate ROI?** Proceed to Step 5 to estimate financial impact, payback period, and annual savings.")
-
-    roi_cta_col1, roi_cta_col2, roi_cta_col3 = st.columns([1, 2, 1])
-    with roi_cta_col2:
-        if st.button("Next: ROI Analysis →", type="primary", use_container_width=True):
-            go_to_step(5)
 
 
 # ===========================
